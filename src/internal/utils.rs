@@ -151,8 +151,12 @@ impl<T> CountedObject<T> {
         }
     }
 
-    pub fn deref(&self) -> &T {
+    pub fn data(&self) -> &T {
         &self.storage
+    }
+
+    pub fn data_mut(&mut self) -> &mut T {
+        &mut self.storage
     }
 
     /// Destroy the managed object, but keep the control data intact
@@ -214,7 +218,7 @@ impl<T> CountedObject<T> {
     }
 }
 
-pub(crate) struct MarkedPtr<T> {
+pub struct MarkedPtr<T> {
     ptr: *mut T,
 }
 
@@ -247,34 +251,40 @@ impl<T> MarkedPtr<T> {
         Self { ptr }
     }
 
-    pub fn is_null(&self) -> bool {
-        self.untagged().is_null()
+    pub fn null() -> Self {
+        Self {
+            ptr: ptr::null_mut()
+        }
     }
 
-    pub fn tag(&self) -> usize {
+    pub fn is_null(&self) -> bool {
+        self.unmarked().is_null()
+    }
+
+    pub fn mark(&self) -> usize {
         let ptr = self.ptr as usize;
         ptr & low_bits::<T>()
     }
 
-    pub fn untagged(&self) -> *mut T {
+    pub fn unmarked(&self) -> *mut T {
         let ptr = self.ptr as usize;
         (ptr & !low_bits::<T>()) as *mut T
     }
 
     pub fn set_ptr(&mut self, ptr: *mut T) {
-        self.ptr = tagged(ptr, self.tag());
+        self.ptr = marked(ptr, self.mark());
     }
 
-    pub fn set_tag(&mut self, tag: usize) {
-        self.ptr = tagged(self.ptr, tag);
+    pub fn set_mark(&mut self, mark: usize) {
+        self.ptr = marked(self.ptr, mark);
     }
 
     pub unsafe fn deref(&self) -> &T {
-        &*self.untagged()
+        &*self.unmarked()
     }
 
     pub unsafe fn deref_mut(&self) -> &mut T {
-        &mut *self.untagged()
+        &mut *self.unmarked()
     }
 }
 
@@ -284,19 +294,19 @@ const fn low_bits<T>() -> usize {
     (1 << mem::align_of::<T>().trailing_zeros()) - 1
 }
 
-/// Returns the pointer with the given tag
+/// Returns the pointer with the given mark
 #[inline]
-fn tagged<T>(ptr: *mut T, tag: usize) -> *mut T {
-    ((ptr as usize & !low_bits::<T>()) | (tag & low_bits::<T>())) as *mut T
+fn marked<T>(ptr: *mut T, mark: usize) -> *mut T {
+    ((ptr as usize & !low_bits::<T>()) | (mark & low_bits::<T>())) as *mut T
 }
 
-/// Decomposes a tagged pointer `data` into the pointer and the tag.
+/// Decomposes a marked pointer `data` into the pointer and the mark.
 #[inline]
 fn decompose_ptr<T>(ptr: *mut T) -> (*mut T, usize) {
     let ptr = ptr as usize;
     let raw = (ptr & !low_bits::<T>()) as *mut T;
-    let tag = ptr & low_bits::<T>();
-    (raw, tag)
+    let mark = ptr & low_bits::<T>();
+    (raw, mark)
 }
 
-pub(crate) type CountedPtr<T> = MarkedPtr<CountedObject<T>>;
+pub(crate) type CountedObjPtr<T> = MarkedPtr<CountedObject<T>>;

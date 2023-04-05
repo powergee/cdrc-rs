@@ -1,45 +1,50 @@
-use std::{marker::PhantomData, ptr, mem};
+use crate::internal::{AcquireRetire, AcquiredPtr, CountedObject};
 
-use crate::internal::{MarkedPtr, AcquireRetire};
-
-pub struct SnapshotPtr<T, S>
+pub struct SnapshotPtr<T, Guard>
 where
-    S: AcquireRetire<T>,
+    Guard: AcquireRetire<T>,
 {
-    acquired: MarkedPtr<T>,
-    _marker: PhantomData<S>,
+    acquired: Guard::AcquiredPtr,
 }
 
-impl<T, S> SnapshotPtr<T, S>
+impl<T, Guard> SnapshotPtr<T, Guard>
 where
-    S: AcquireRetire<T>,
+    Guard: AcquireRetire<T>,
 {
-    pub(crate) fn new() -> Self {
-        Self {
-            acquired: MarkedPtr::new(ptr::null_mut()),
-            _marker: PhantomData,
-        }
+    pub(crate) unsafe fn deref_counted(&self, _: &Guard) -> &CountedObject<T> {
+        self.acquired.deref_counted()
     }
 
-    pub fn deref(&self) -> &T {
-        unsafe { self.acquired.deref() }
+    pub(crate) unsafe fn deref_counted_mut(&self, _: &Guard) -> &mut CountedObject<T> {
+        self.acquired.deref_counted_mut()
     }
 
-    pub fn deref_mut(&self) -> &mut T {
-        unsafe { self.acquired.deref_mut() }
+    pub unsafe fn deref_data(&self, guard: &Guard) -> &T {
+        self.deref_counted(guard).data()
     }
-    
+
+    pub unsafe fn deref_data_mut(&self, guard: &Guard) -> &mut T {
+        self.deref_counted_mut(guard).data_mut()
+    }
+
     pub fn is_null(&self) -> bool {
         self.acquired.is_null()
     }
 
-    pub fn swap(lhs: &mut Self, rhs: &mut Self) {
-        mem::swap(lhs, rhs);
+    pub fn clear(&mut self, guard: &Guard) {
+        if !self.is_null() && !self.acquired.is_protected() {
+            unsafe { guard.decrement_ref_cnt(self.acquired.as_unmarked()) }
+        }
+        self.acquired.clear_protection();
     }
+}
 
-    pub fn clear(&self) {
-        let ptr = unsafe { self.acquired.deref_mut() };
-        
+impl<T, S> Drop for SnapshotPtr<T, S>
+where
+    S: AcquireRetire<T>,
+{
+    fn drop(&mut self) {
+        self.clear(&S::handle())
     }
 }
 
@@ -48,6 +53,6 @@ where
     S: AcquireRetire<T>,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.acquired == other.acquired
+        self.acquired.eq(&other.acquired)
     }
 }

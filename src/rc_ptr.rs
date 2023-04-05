@@ -1,12 +1,12 @@
 use std::{marker::PhantomData, ptr};
 
-use crate::internal::{CountedPtr, MarkedPtr, AcquireRetire};
+use crate::internal::{CountedObjPtr, MarkedPtr, AcquireRetire};
 
 pub struct RcPtr<T, S>
 where
     S: AcquireRetire<T>,
 {
-    ptr: CountedPtr<T>,
+    ptr: CountedObjPtr<T>,
     _marker: PhantomData<S>,
 }
 
@@ -16,7 +16,7 @@ where
 {
     pub(crate) fn new() -> Self {
         Self {
-            ptr: MarkedPtr::new(ptr::null_mut()),
+            ptr: MarkedPtr::null(),
             _marker: PhantomData
         }
     }

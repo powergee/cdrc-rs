@@ -1,21 +1,21 @@
-use std::{marker::PhantomData, ptr};
+use std::{marker::PhantomData};
 
 use atomic::{Atomic, Ordering};
 use static_assertions::const_assert;
 
-use crate::{internal::{delayed_decrement_ref_cnt, AcquireRetire, CountedPtr, MarkedPtr}, rc_ptr::RcPtr};
+use crate::{internal::{AcquireRetire, CountedObjPtr, MarkedPtr}, rc_ptr::RcPtr};
 
 pub struct AtomicRcPtr<T, S>
 where
     S: AcquireRetire<T>,
 {
-    ptr: Atomic<CountedPtr<T>>,
+    ptr: Atomic<CountedObjPtr<T>>,
     _marker: PhantomData<S>,
 }
 
 // Ensure that MarkedPtr<T> is 8-byte long,
 // so that lock-free atomic operations are possible.
-const_assert!(Atomic::<CountedPtr<u8>>::is_lock_free());
+const_assert!(Atomic::<CountedObjPtr<u8>>::is_lock_free());
 
 impl<T, S> AtomicRcPtr<T, S>
 where
@@ -23,7 +23,7 @@ where
 {
     pub fn new() -> Self {
         Self {
-            ptr: Atomic::new(MarkedPtr::new(ptr::null_mut())),
+            ptr: Atomic::new(MarkedPtr::null()),
             _marker: PhantomData,
         }
     }
@@ -31,9 +31,9 @@ where
     pub fn store_null(&self, guard: &S) {
         let old = self
             .ptr
-            .swap(MarkedPtr::new(ptr::null_mut()), Ordering::SeqCst);
+            .swap(MarkedPtr::null(), Ordering::SeqCst);
         if !old.is_null() {
-            unsafe { delayed_decrement_ref_cnt(old.untagged(), guard) };
+            unsafe { guard.delayed_decrement_ref_cnt(old.unmarked()) };
         }
     }
 
@@ -53,7 +53,7 @@ where
     fn drop(&mut self) {
         let ptr = self.ptr.load(Ordering::SeqCst);
         if !ptr.is_null() {
-            unsafe { delayed_decrement_ref_cnt(ptr.untagged(), &S::handle()) };
+            unsafe { S::handle().delayed_decrement_ref_cnt(ptr.unmarked()) };
         }
     }
 }
