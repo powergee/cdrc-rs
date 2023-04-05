@@ -4,7 +4,7 @@ use std::mem;
 use atomic::Ordering;
 
 use crate::internal::utils::CountedObject;
-use crate::internal::{AcquireRetire, RetireType, CountedObjPtr, AcquiredPtr};
+use crate::internal::{AcquireRetire, AcquiredPtr, CountedObjPtr, RetireType};
 
 pub struct GuardEBR<T> {
     guard: crossbeam_epoch::Guard,
@@ -21,7 +21,7 @@ impl<T> From<crossbeam_epoch::Guard> for GuardEBR<T> {
 }
 
 /// A marked pointer which is pointing a `CountedObjPtr<T>`.
-/// 
+///
 /// We may want to use `crossbeam_ebr::Shared` as a `AcquiredPtr`,
 /// but trait interfaces can be complicated because `crossbeam_ebr::Shared`
 /// requires to specify a lifetime specifier.
@@ -36,8 +36,8 @@ impl<T> AcquiredPtr<T> for AcquiredPtrEBR<T> {
         self.0.deref_mut()
     }
 
-    fn as_unmarked(&self) -> *mut CountedObject<T> {
-        self.0.unmarked()
+    fn as_counted_ptr(&self) -> CountedObjPtr<T> {
+        self.0
     }
 
     fn is_null(&self) -> bool {
@@ -74,7 +74,7 @@ impl<T> AcquireRetire<T> for GuardEBR<T> {
         Box::into_raw(Box::new(obj))
     }
 
-    fn acquire(&self, link: atomic::Atomic<CountedObjPtr<T>>) -> Self::AcquiredPtr {
+    fn acquire(&self, link: &atomic::Atomic<CountedObjPtr<T>>) -> Self::AcquiredPtr {
         AcquiredPtrEBR(link.load(Ordering::Acquire))
     }
 
@@ -86,7 +86,7 @@ impl<T> AcquireRetire<T> for GuardEBR<T> {
         AcquiredPtrEBR(CountedObjPtr::null())
     }
 
-    fn protect_snapshot(&self, link: atomic::Atomic<CountedObjPtr<T>>) -> Self::AcquiredPtr {
+    fn protect_snapshot(&self, link: &atomic::Atomic<CountedObjPtr<T>>) -> Self::AcquiredPtr {
         let ptr = link.load(Ordering::Acquire);
         if !ptr.is_null() && unsafe { ptr.deref() }.use_count() == 0 {
             AcquiredPtrEBR(CountedObjPtr::null())

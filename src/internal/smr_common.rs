@@ -11,11 +11,11 @@ pub enum RetireType {
 }
 
 /// A SMR-specific acquired pointer trait
-/// 
+///
 /// In most cases such as EBR, IBR and Hyaline,
 /// AcquiredPtr is equivalent to a simple marked pointer
 /// pointing a CountedObject<T>.
-/// 
+///
 /// However, for some pointer-based SMR, `AcquiredPtr` should
 /// contain other information like an index of a hazard slot.
 /// For this reason, a type for acquired pointer must be
@@ -26,7 +26,7 @@ pub trait AcquiredPtr<T> {
     unsafe fn deref_counted(&self) -> &CountedObject<T>;
     /// Dereference to a mutable `CountedObject`.
     unsafe fn deref_counted_mut(&self) -> &mut CountedObject<T>;
-    fn as_unmarked(&self) -> *mut CountedObject<T>;
+    fn as_counted_ptr(&self) -> CountedObjPtr<T>;
     fn is_null(&self) -> bool;
     fn is_protected(&self) -> bool;
     fn clear_protection(&mut self);
@@ -37,7 +37,7 @@ pub trait AcquiredPtr<T> {
 /// A SMR-specific memory managing trait
 pub trait AcquireRetire<T> {
     /// A SMR-specific acquired pointer trait
-    /// 
+    ///
     /// For more information, read a comment on `AcquiredPtr<T>`.
     type AcquiredPtr: AcquiredPtr<T>;
 
@@ -45,14 +45,14 @@ pub trait AcquireRetire<T> {
 
     fn handle() -> Self;
     fn create_object(&self, obj: T) -> *mut CountedObject<T>;
-    fn acquire(&self, link: Atomic<CountedObjPtr<T>>) -> Self::AcquiredPtr;
+    fn acquire(&self, link: &Atomic<CountedObjPtr<T>>) -> Self::AcquiredPtr;
     /// Like acquire, but assuming that the caller already has a
     /// copy of the handle and knows that it is protected
     fn reserve(&self, ptr: *mut CountedObject<T>) -> Self::AcquiredPtr;
     /// Dummy function for when we need to conditionally reserve
     /// something, but might need to reserve nothing
     fn reserve_nothing(&self) -> Self::AcquiredPtr;
-    fn protect_snapshot(&self, link: Atomic<CountedObjPtr<T>>) -> Self::AcquiredPtr;
+    fn protect_snapshot(&self, link: &Atomic<CountedObjPtr<T>>) -> Self::AcquiredPtr;
     fn release(&self);
     unsafe fn delete_object(&self, ptr: *mut CountedObject<T>);
     unsafe fn retire(&self, ptr: *mut CountedObject<T>, ret_type: RetireType);
@@ -125,5 +125,4 @@ pub trait AcquireRetire<T> {
     }
 
     /* Interfaces to access & manage the acquired pointer */
-    
 }

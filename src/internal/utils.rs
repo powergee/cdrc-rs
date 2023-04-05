@@ -253,7 +253,7 @@ impl<T> MarkedPtr<T> {
 
     pub fn null() -> Self {
         Self {
-            ptr: ptr::null_mut()
+            ptr: ptr::null_mut(),
         }
     }
 

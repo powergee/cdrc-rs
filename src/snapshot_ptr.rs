@@ -1,4 +1,4 @@
-use crate::internal::{AcquireRetire, AcquiredPtr, CountedObject};
+use crate::internal::{AcquireRetire, AcquiredPtr, CountedObjPtr, CountedObject};
 
 pub struct SnapshotPtr<T, Guard>
 where
@@ -11,6 +11,10 @@ impl<T, Guard> SnapshotPtr<T, Guard>
 where
     Guard: AcquireRetire<T>,
 {
+    pub fn new(acquired: Guard::AcquiredPtr) -> Self {
+        Self { acquired }
+    }
+
     pub(crate) unsafe fn deref_counted(&self, _: &Guard) -> &CountedObject<T> {
         self.acquired.deref_counted()
     }
@@ -33,24 +37,34 @@ where
 
     pub fn clear(&mut self, guard: &Guard) {
         if !self.is_null() && !self.acquired.is_protected() {
-            unsafe { guard.decrement_ref_cnt(self.acquired.as_unmarked()) }
+            unsafe { guard.decrement_ref_cnt(self.acquired.as_counted_ptr().unmarked()) }
         }
         self.acquired.clear_protection();
     }
-}
 
-impl<T, S> Drop for SnapshotPtr<T, S>
-where
-    S: AcquireRetire<T>,
-{
-    fn drop(&mut self) {
-        self.clear(&S::handle())
+    pub fn as_counted_ptr(&self) -> CountedObjPtr<T> {
+        self.acquired.as_counted_ptr()
+    }
+
+    pub fn is_protected(&self) -> bool {
+        self.acquired.is_protected()
     }
 }
 
-impl<T, S> PartialEq for SnapshotPtr<T, S>
+impl<T, Guard> Drop for SnapshotPtr<T, Guard>
 where
-    S: AcquireRetire<T>,
+    Guard: AcquireRetire<T>,
+{
+    fn drop(&mut self) {
+        if !self.is_null() && !self.acquired.is_protected() {
+            self.clear(&Guard::handle())
+        }
+    }
+}
+
+impl<T, Guard> PartialEq for SnapshotPtr<T, Guard>
+where
+    Guard: AcquireRetire<T>,
 {
     fn eq(&self, other: &Self) -> bool {
         self.acquired.eq(&other.acquired)
