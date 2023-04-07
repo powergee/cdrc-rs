@@ -35,10 +35,6 @@ impl StickyCounter {
         1 << (mem::size_of::<Count>() * 8 - 2)
     }
 
-    const fn max_value() -> Count {
-        Self::zero_pending_flag() - 1
-    }
-
     pub fn new() -> Self {
         Self { x: Atomic::new(1) }
     }
@@ -103,21 +99,6 @@ impl StickyCounter {
                 }
             }
         }
-    }
-
-    /// Resets the value of the counter to the given value. This may be called when the counter
-    /// is zero to bring it back to a non-zero value.
-    ///
-    /// It is not permitted to race with an increment or decrement.
-    pub fn reset(&self, desired: Count, order: Ordering) {
-        self.x.store(
-            if desired == 0 {
-                Self::zero_flag()
-            } else {
-                desired
-            },
-            order,
-        );
     }
 }
 
@@ -298,15 +279,6 @@ const fn low_bits<T>() -> usize {
 #[inline]
 fn marked<T>(ptr: *mut T, mark: usize) -> *mut T {
     ((ptr as usize & !low_bits::<T>()) | (mark & low_bits::<T>())) as *mut T
-}
-
-/// Decomposes a marked pointer `data` into the pointer and the mark.
-#[inline]
-fn decompose_ptr<T>(ptr: *mut T) -> (*mut T, usize) {
-    let ptr = ptr as usize;
-    let raw = (ptr & !low_bits::<T>()) as *mut T;
-    let mark = ptr & low_bits::<T>();
-    (raw, mark)
 }
 
 pub(crate) type CountedObjPtr<T> = MarkedPtr<CountedObject<T>>;

@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, mem, ptr};
+use std::marker::PhantomData;
 
 use crate::{
     internal::{AcquireRetire, Count, CountedObjPtr, MarkedPtr},
@@ -17,31 +17,6 @@ impl<T, Guard> RcPtr<T, Guard>
 where
     Guard: AcquireRetire<T>,
 {
-    pub(crate) fn null() -> Self {
-        Self {
-            ptr: MarkedPtr::null(),
-            _marker: PhantomData,
-        }
-    }
-
-    pub(crate) fn from(ptr: &SnapshotPtr<T, Guard>, guard: &Guard) -> Self {
-        let rc = Self {
-            ptr: ptr.as_counted_ptr(),
-            _marker: PhantomData,
-        };
-        unsafe { guard.decrement_ref_cnt(rc.ptr.unmarked()) };
-        rc
-    }
-
-    pub(crate) fn clone(&self, guard: &Guard) -> Self {
-        let rc = Self {
-            ptr: self.ptr,
-            _marker: PhantomData,
-        };
-        unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
-        rc
-    }
-
     pub(crate) fn new_with_incr(ptr: CountedObjPtr<T>, guard: &Guard) -> Self {
         let rc = Self {
             ptr,
@@ -58,12 +33,30 @@ where
         }
     }
 
+    pub fn from(ptr: &SnapshotPtr<T, Guard>, guard: &Guard) -> Self {
+        let rc = Self {
+            ptr: ptr.as_counted_ptr(),
+            _marker: PhantomData,
+        };
+        unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
+        rc
+    }
+
     pub fn make_shared(obj: T, guard: &Guard) -> Self {
         let ptr = guard.create_object(obj);
         Self {
             ptr: CountedObjPtr::new(ptr),
             _marker: PhantomData,
         }
+    }
+
+    pub fn clone(&self, guard: &Guard) -> Self {
+        let rc = Self {
+            ptr: self.ptr,
+            _marker: PhantomData,
+        };
+        unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
+        rc
     }
 
     pub fn clear(&mut self, guard: &Guard) {

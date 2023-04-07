@@ -3,8 +3,8 @@ mod internal;
 mod rc_ptr;
 mod snapshot_ptr;
 
-pub use internal::GuardEBR;
 pub use atomic_rc_ptr::AtomicRcPtr;
+pub use internal::GuardEBR;
 pub use rc_ptr::RcPtr;
 pub use snapshot_ptr::SnapshotPtr;
 
