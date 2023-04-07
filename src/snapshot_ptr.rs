@@ -19,15 +19,19 @@ where
         self.acquired.deref_counted()
     }
 
-    pub(crate) unsafe fn deref_counted_mut(&self, _: &Guard) -> &mut CountedObject<T> {
+    pub(crate) unsafe fn deref_counted_mut(&mut self, _: &Guard) -> &mut CountedObject<T> {
         self.acquired.deref_counted_mut()
     }
 
+    /// # Safety
+    /// TODO
     pub unsafe fn deref_data(&self, guard: &Guard) -> &T {
         self.deref_counted(guard).data()
     }
 
-    pub unsafe fn deref_data_mut(&self, guard: &Guard) -> &mut T {
+    /// # Safety
+    /// TODO
+    pub unsafe fn deref_data_mut(&mut self, guard: &Guard) -> &mut T {
         self.deref_counted_mut(guard).data_mut()
     }
 

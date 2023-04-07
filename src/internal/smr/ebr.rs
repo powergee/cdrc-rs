@@ -32,7 +32,7 @@ impl<T> AcquiredPtr<T> for AcquiredPtrEBR<T> {
         self.0.deref()
     }
 
-    unsafe fn deref_counted_mut(&self) -> &mut CountedObject<T> {
+    unsafe fn deref_counted_mut(&mut self) -> &mut CountedObject<T> {
         self.0.deref_mut()
     }
 

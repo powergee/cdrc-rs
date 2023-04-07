@@ -90,9 +90,9 @@ impl StickyCounter {
             Ordering::SeqCst,
             Ordering::SeqCst,
         ) {
-            Ok(_) => return 0,
+            Ok(_) => 0,
             Err(actual) => {
-                return if (actual & Self::zero_flag()) > 0 {
+                if (actual & Self::zero_flag()) > 0 {
                     0
                 } else {
                     actual
@@ -214,7 +214,7 @@ impl<T> Default for MarkedPtr<T> {
 impl<T> Clone for MarkedPtr<T> {
     fn clone(&self) -> Self {
         Self {
-            ptr: self.ptr.clone(),
+            ptr: self.ptr,
         }
     }
 }
@@ -264,7 +264,7 @@ impl<T> MarkedPtr<T> {
         &*self.unmarked()
     }
 
-    pub unsafe fn deref_mut(&self) -> &mut T {
+    pub unsafe fn deref_mut(&mut self) -> &mut T {
         &mut *self.unmarked()
     }
 }

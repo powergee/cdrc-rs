@@ -70,11 +70,15 @@ where
         self.ptr.is_null()
     }
 
+    /// # Safety
+    /// TODO
     pub unsafe fn deref(&self) -> &T {
         self.ptr.deref().data()
     }
 
-    pub unsafe fn deref_mut(&self) -> &mut T {
+    /// # Safety
+    /// TODO
+    pub unsafe fn deref_mut(&mut self) -> &mut T {
         self.ptr.deref_mut().data_mut()
     }
 

@@ -25,13 +25,6 @@ impl<T, Guard> AtomicRcPtr<T, Guard>
 where
     Guard: AcquireRetire<T>,
 {
-    pub fn new() -> Self {
-        Self {
-            link: Atomic::new(MarkedPtr::null()),
-            _marker: PhantomData,
-        }
-    }
-
     pub fn store_null(&self, guard: &Guard) {
         let old = self.link.swap(MarkedPtr::null(), Ordering::SeqCst);
         if !old.is_null() {
@@ -93,8 +86,7 @@ where
 
     pub fn load(&self, guard: &Guard) -> RcPtr<T, Guard> {
         let acquired = guard.acquire(&self.link);
-        let result = RcPtr::new_with_incr(acquired.as_counted_ptr(), guard);
-        result
+        RcPtr::new_with_incr(acquired.as_counted_ptr(), guard)
     }
 
     pub fn take_snapshot(&self, guard: &Guard) -> SnapshotPtr<T, Guard> {
@@ -135,6 +127,18 @@ where
             return true;
         }
         false
+    }
+}
+
+impl<T, Guard> Default for AtomicRcPtr<T, Guard>
+where
+    Guard: AcquireRetire<T>,
+{
+    fn default() -> Self {
+        Self {
+            link: Atomic::new(MarkedPtr::null()),
+            _marker: PhantomData,
+        }
     }
 }
 

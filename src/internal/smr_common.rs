@@ -25,7 +25,7 @@ pub trait AcquiredPtr<T> {
     /// Dereference to a `CountedObject`.
     unsafe fn deref_counted(&self) -> &CountedObject<T>;
     /// Dereference to a mutable `CountedObject`.
-    unsafe fn deref_counted_mut(&self) -> &mut CountedObject<T>;
+    unsafe fn deref_counted_mut(&mut self) -> &mut CountedObject<T>;
     fn as_counted_ptr(&self) -> CountedObjPtr<T>;
     fn is_null(&self) -> bool;
     fn is_protected(&self) -> bool;
