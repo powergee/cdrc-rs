@@ -1,7 +1,11 @@
 use atomic::{Atomic, Ordering};
 use core::mem;
 use static_assertions::const_assert;
-use std::{mem::ManuallyDrop, ptr, sync::atomic::{compiler_fence, AtomicBool}};
+use std::{
+    mem::ManuallyDrop,
+    ptr,
+    sync::atomic::{compiler_fence, AtomicBool},
+};
 
 pub(crate) type Count = u32;
 

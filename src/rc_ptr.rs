@@ -35,7 +35,7 @@ where
         }
     }
 
-    pub fn from(ptr: &'g SnapshotPtr<T, Guard>, guard: &'g Guard) -> Self {
+    pub fn from_snapshot(ptr: &SnapshotPtr<'g, T, Guard>, guard: &'g Guard) -> Self {
         let rc = Self {
             ptr: ptr.as_counted_ptr(),
             _marker: PhantomData,

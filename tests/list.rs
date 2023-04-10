@@ -1,4 +1,4 @@
-use cdrc_rs::{AcquireRetire, AtomicRcPtr, RcPtr};
+use cdrc_rs::{AcquireRetire, AtomicRcPtr, RcPtr, SnapshotPtr};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem;
@@ -65,7 +65,7 @@ impl<K, V, Guard> Node<K, V, Guard>
 where
     Guard: AcquireRetire,
     K: Default,
-    V: Default
+    V: Default,
 {
     /// Creates a new node.
     fn new(key: K, value: V) -> Self {
@@ -91,6 +91,10 @@ struct Cursor<'g, K, V, Guard>
 where
     Guard: AcquireRetire,
 {
+    // `SnapshotPtr`s are used only for traversing the list.
+    prev_snap: SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
+    curr_snap: SnapshotPtr<'g, Node<K, V, Guard>, Guard>,
+
     prev: RcPtr<'g, Node<K, V, Guard>, Guard>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // marked pointer and cause cleanup to fail.
@@ -103,10 +107,15 @@ where
     Guard: AcquireRetire,
 {
     /// Creates a cursor.
-    fn new(head: &AtomicRcPtr<Node<K, V, Guard>, Guard>, guard: &'g Guard) -> Self {
-        let prev = head.load(guard);
-        let curr = unsafe { prev.deref() }.next.load(guard);
-        Self { prev, curr }
+    fn new(head: &'g AtomicRcPtr<Node<K, V, Guard>, Guard>, guard: &'g Guard) -> Self {
+        let prev_snap = head.load_snapshot(guard);
+        let curr_snap = unsafe { prev_snap.deref() }.next.load_snapshot(guard);
+        Self {
+            prev_snap,
+            curr_snap,
+            prev: RcPtr::default(),
+            curr: RcPtr::default(),
+        }
     }
 
     /// Clean up a chain of logically removed nodes in each traversal.
@@ -116,10 +125,10 @@ where
         // - cursor.curr: first unmarked node w/ key >= search key (4)
         // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
         // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
-        let mut prev_next = self.curr.clone(guard);
+        let mut prev_next = self.curr_snap.clone(guard);
         let found = loop {
-            let curr_node = some_or!(unsafe { self.curr.as_ref() }, break false);
-            let next = curr_node.next.load(guard);
+            let curr_node = some_or!(unsafe { self.curr_snap.as_ref() }, break false);
+            let next = curr_node.next.load_snapshot(guard);
 
             // - finding stage is done if cursor.curr advancement stops
             // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
@@ -128,14 +137,14 @@ where
 
             if next.mark() != 0 {
                 // We add a 0 tag here so that `self.curr`s tag is always 0.
-                self.curr = next.with_mark(0);
+                self.curr_snap = next.with_mark(0);
                 continue;
             }
 
             match curr_node.key.cmp(key) {
                 Less => {
-                    mem::swap(&mut self.prev, &mut self.curr);
-                    self.curr = next.clone(guard);
+                    mem::swap(&mut self.prev_snap, &mut self.curr_snap);
+                    self.curr_snap = next.clone(guard);
                     prev_next = next;
                 }
                 Equal => break true,
@@ -143,10 +152,15 @@ where
             }
         };
 
+        self.prev = RcPtr::from_snapshot(&self.prev_snap, guard);
+        self.curr = RcPtr::from_snapshot(&self.curr_snap, guard);
+
         // If prev and curr WERE adjacent, no need to clean up
-        if prev_next == self.curr {
+        if prev_next == self.curr_snap {
             return Ok(found);
         }
+
+        let prev_next = RcPtr::from_snapshot(&prev_next, guard);
 
         // cleanup marked nodes between prev and curr
         if !unsafe { self.prev.deref() }
@@ -268,8 +282,7 @@ where
     {
         let mut node = RcPtr::make_shared(Node::new(key, value), guard);
         loop {
-            let (found, mut cursor) =
-                self.find(&unsafe { node.deref() }.key, &find, guard);
+            let (found, mut cursor) = self.find(&unsafe { node.deref() }.key, &find, guard);
             if found {
                 return false;
             }
@@ -357,10 +370,10 @@ pub trait ConcurrentMap<K, V, Guard> {
 pub mod tests {
     extern crate rand;
     use super::ConcurrentMap;
+    use super::HList;
     use cdrc_rs::{AcquireRetire, GuardEBR};
     use crossbeam_utils::thread;
     use rand::prelude::*;
-    use super::HList;
 
     const THREADS: i32 = 30;
     const ELEMENTS_PER_THREADS: i32 = 1000;

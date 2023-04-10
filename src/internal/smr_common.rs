@@ -22,10 +22,10 @@ pub enum RetireType {
 /// SMR-dependent, and every SMR must provide some
 /// reasonable interfaces to access and manage this pointer.
 pub trait AcquiredPtr<T> {
-    /// Dereference to a `CountedObject`.
-    unsafe fn deref_counted<'g>(&self) -> &'g CountedObject<T>;
-    /// Dereference to a mutable `CountedObject`.
-    unsafe fn deref_counted_mut<'g>(&mut self) -> &'g mut CountedObject<T>;
+    /// Dereference to a immutable `MarkedCntObjPtr`.
+    unsafe fn deref_counted_ptr(&self) -> &MarkedCntObjPtr<T>;
+    /// Dereference to a mutable `MarkedCntObjPtr`.
+    unsafe fn deref_counted_ptr_mut(&mut self) -> &mut MarkedCntObjPtr<T>;
     fn as_counted_ptr(&self) -> MarkedCntObjPtr<T>;
     fn is_null(&self) -> bool;
     fn is_protected(&self) -> bool;
@@ -46,13 +46,16 @@ pub trait AcquireRetire {
     fn handle() -> Self;
     fn create_object<T>(&self, obj: T) -> *mut CountedObject<T>;
     fn acquire<T>(&self, link: &Atomic<MarkedCntObjPtr<T>>) -> Self::AcquiredPtr<T>;
-    /// Like acquire, but assuming that the caller already has a
+    /// Like `acquire`, but assuming that the caller already has a
     /// copy of the handle and knows that it is protected
     fn reserve<T>(&self, ptr: *mut CountedObject<T>) -> Self::AcquiredPtr<T>;
     /// Dummy function for when we need to conditionally reserve
     /// something, but might need to reserve nothing
     fn reserve_nothing<T>(&self) -> Self::AcquiredPtr<T>;
     fn protect_snapshot<T>(&self, link: &Atomic<MarkedCntObjPtr<T>>) -> Self::AcquiredPtr<T>;
+    /// Like `protect_snapshot`, but assuming that the caller already has an
+    /// another snapshot containing the pointer.
+    fn reserve_snapshot<T>(&self, ptr: MarkedCntObjPtr<T>) -> Self::AcquiredPtr<T>;
     fn release(&self);
     unsafe fn delete_object<T>(&self, ptr: *mut CountedObject<T>);
     unsafe fn retire<T>(&self, ptr: *mut CountedObject<T>, ret_type: RetireType);

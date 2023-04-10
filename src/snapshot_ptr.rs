@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::internal::{AcquireRetire, AcquiredPtr, CountedObject, MarkedCntObjPtr};
+use crate::internal::{AcquireRetire, AcquiredPtr, MarkedCntObjPtr};
 
 pub struct SnapshotPtr<'g, T: 'g, Guard: 'g>
 where
@@ -19,31 +19,27 @@ where
     pub fn new(acquired: Guard::AcquiredPtr<T>) -> Self {
         Self {
             acquired,
-            _marker: PhantomData
+            _marker: PhantomData,
         }
     }
 
-    pub(crate) unsafe fn deref_counted(&self) -> &'g CountedObject<T> {
-        self.acquired.deref_counted()
-    }
-
-    pub(crate) unsafe fn deref_counted_mut(&mut self) -> &'g mut CountedObject<T> {
-        self.acquired.deref_counted_mut()
+    pub fn clone(&self, guard: &'g Guard) -> Self {
+        Self::new(guard.reserve_snapshot(self.as_counted_ptr()))
     }
 
     /// # Safety
     /// TODO
     pub unsafe fn deref(&self) -> &'g T {
-        self.deref_counted().data()
+        self.acquired.deref_counted_ptr().deref().data()
     }
 
     /// # Safety
     /// TODO
     pub unsafe fn deref_mut(&mut self) -> &'g mut T {
-        self.deref_counted_mut().data_mut()
+        self.acquired.deref_counted_ptr_mut().deref_mut().data_mut()
     }
 
-    pub fn as_ref(&self) -> Option<&'g T> {
+    pub unsafe fn as_ref(&self) -> Option<&'g T> {
         if self.is_null() {
             None
         } else {
@@ -68,6 +64,21 @@ where
 
     pub fn is_protected(&self) -> bool {
         self.acquired.is_protected()
+    }
+
+    pub fn mark(&self) -> usize {
+        self.as_counted_ptr().mark()
+    }
+
+    pub fn unmarked(self) -> Self {
+        self.with_mark(0)
+    }
+
+    pub fn with_mark(mut self, mark: usize) -> Self {
+        unsafe {
+            self.acquired.deref_counted_ptr_mut().set_mark(mark);
+        }
+        self
     }
 }
 

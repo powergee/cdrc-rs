@@ -23,12 +23,12 @@ impl From<crossbeam_epoch::Guard> for GuardEBR {
 pub struct AcquiredPtrEBR<T>(MarkedCntObjPtr<T>);
 
 impl<T> AcquiredPtr<T> for AcquiredPtrEBR<T> {
-    unsafe fn deref_counted<'g>(&self) -> &'g CountedObject<T> {
-        self.0.deref()
+    unsafe fn deref_counted_ptr(&self) -> &MarkedCntObjPtr<T> {
+        &self.0
     }
 
-    unsafe fn deref_counted_mut<'g>(&mut self) -> &'g mut CountedObject<T> {
-        self.0.deref_mut()
+    unsafe fn deref_counted_ptr_mut(&mut self) -> &mut MarkedCntObjPtr<T> {
+        &mut self.0
     }
 
     fn as_counted_ptr(&self) -> MarkedCntObjPtr<T> {
@@ -85,7 +85,10 @@ impl AcquireRetire for GuardEBR {
         &self,
         link: &atomic::Atomic<MarkedCntObjPtr<T>>,
     ) -> Self::AcquiredPtr<T> {
-        let ptr = link.load(Ordering::Acquire);
+        self.reserve_snapshot(link.load(Ordering::Acquire))
+    }
+
+    fn reserve_snapshot<T>(&self, ptr: MarkedCntObjPtr<T>) -> Self::AcquiredPtr<T> {
         if !ptr.is_null() && unsafe { ptr.deref() }.use_count() == 0 {
             AcquiredPtrEBR(MarkedCntObjPtr::null())
         } else {
