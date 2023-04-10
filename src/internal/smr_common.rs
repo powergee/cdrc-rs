@@ -1,8 +1,8 @@
 use atomic::Atomic;
 
-use crate::internal::utils::MarkedCntObjPtr;
 use crate::internal::utils::CountedObject;
 use crate::internal::utils::EjectAction;
+use crate::internal::utils::MarkedCntObjPtr;
 
 pub enum RetireType {
     DecrementStrongCount,
@@ -23,9 +23,9 @@ pub enum RetireType {
 /// reasonable interfaces to access and manage this pointer.
 pub trait AcquiredPtr<T> {
     /// Dereference to a `CountedObject`.
-    unsafe fn deref_counted(&self) -> &CountedObject<T>;
+    unsafe fn deref_counted<'g>(&self) -> &'g CountedObject<T>;
     /// Dereference to a mutable `CountedObject`.
-    unsafe fn deref_counted_mut(&mut self) -> &mut CountedObject<T>;
+    unsafe fn deref_counted_mut<'g>(&mut self) -> &'g mut CountedObject<T>;
     fn as_counted_ptr(&self) -> MarkedCntObjPtr<T>;
     fn is_null(&self) -> bool;
     fn is_protected(&self) -> bool;

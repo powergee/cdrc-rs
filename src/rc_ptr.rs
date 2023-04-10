@@ -5,19 +5,19 @@ use crate::{
     snapshot_ptr::SnapshotPtr,
 };
 
-pub struct RcPtr<T, Guard>
+pub struct RcPtr<'g, T: 'g, Guard: 'g>
 where
     Guard: AcquireRetire,
 {
     ptr: MarkedCntObjPtr<T>,
-    _marker: PhantomData<Guard>,
+    _marker: PhantomData<(&'g (), Guard)>,
 }
 
-impl<T, Guard> RcPtr<T, Guard>
+impl<'g, T, Guard> RcPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {
-    pub(crate) fn new_with_incr(ptr: MarkedCntObjPtr<T>, guard: &Guard) -> Self {
+    pub(crate) fn new_with_incr(ptr: MarkedCntObjPtr<T>, guard: &'g Guard) -> Self {
         let rc = Self {
             ptr,
             _marker: PhantomData,
@@ -33,7 +33,7 @@ where
         }
     }
 
-    pub fn from(ptr: &SnapshotPtr<T, Guard>, guard: &Guard) -> Self {
+    pub fn from(ptr: &'g SnapshotPtr<T, Guard>, guard: &'g Guard) -> Self {
         let rc = Self {
             ptr: ptr.as_counted_ptr(),
             _marker: PhantomData,
@@ -42,7 +42,7 @@ where
         rc
     }
 
-    pub fn make_shared(obj: T, guard: &Guard) -> Self {
+    pub fn make_shared(obj: T, guard: &'g Guard) -> Self {
         let ptr = guard.create_object(obj);
         Self {
             ptr: MarkedCntObjPtr::new(ptr),
@@ -50,7 +50,7 @@ where
         }
     }
 
-    pub fn clone(&self, guard: &Guard) -> Self {
+    pub fn clone(&self, guard: &'g Guard) -> Self {
         let rc = Self {
             ptr: self.ptr,
             _marker: PhantomData,
@@ -70,7 +70,7 @@ where
         self.ptr.is_null()
     }
 
-    pub fn as_ref(&self) -> Option<&T> {
+    pub unsafe fn as_ref(&self) -> Option<&'g T> {
         if self.is_null() {
             None
         } else {
@@ -80,13 +80,13 @@ where
 
     /// # Safety
     /// TODO
-    pub unsafe fn deref(&self) -> &T {
+    pub unsafe fn deref(&self) -> &'g T {
         self.ptr.deref().data()
     }
 
     /// # Safety
     /// TODO
-    pub unsafe fn deref_mut(&mut self) -> &mut T {
+    pub unsafe fn deref_mut(&mut self) -> &'g mut T {
         self.ptr.deref_mut().data_mut()
     }
 
@@ -115,15 +115,19 @@ where
     }
 
     pub fn with_mark(self, mark: usize) -> Self {
-        Self::new_without_incr(self.ptr.marked(mark))
+        Self::new_without_incr(self.ptr.with_mark(mark))
     }
 
     pub fn eq_without_tag(&self, rhs: &Self) -> bool {
         self.as_counted_ptr().unmarked() == rhs.as_counted_ptr().unmarked()
     }
+
+    pub fn is_protected(&self) -> bool {
+        false
+    }
 }
 
-impl<T, Guard> Drop for RcPtr<T, Guard>
+impl<'g, T, Guard> Drop for RcPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {
@@ -134,7 +138,7 @@ where
     }
 }
 
-impl<T, Guard> PartialEq for RcPtr<T, Guard>
+impl<'g, T, Guard> PartialEq for RcPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {
@@ -143,11 +147,14 @@ where
     }
 }
 
-impl<T, Guard> Default for RcPtr<T, Guard>
+impl<'g, T, Guard> Default for RcPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {
     fn default() -> Self {
-        Self { ptr: MarkedPtr::null(), _marker: Default::default() }
+        Self {
+            ptr: MarkedPtr::null(),
+            _marker: Default::default(),
+        }
     }
 }

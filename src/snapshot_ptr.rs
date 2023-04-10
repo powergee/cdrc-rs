@@ -1,47 +1,53 @@
-use crate::internal::{AcquireRetire, AcquiredPtr, MarkedCntObjPtr, CountedObject};
+use std::marker::PhantomData;
 
-pub struct SnapshotPtr<T, Guard>
+use crate::internal::{AcquireRetire, AcquiredPtr, CountedObject, MarkedCntObjPtr};
+
+pub struct SnapshotPtr<'g, T: 'g, Guard: 'g>
 where
     Guard: AcquireRetire,
 {
     // Guard::AcquiredPtr is usually a wrapper struct
     // containing MarkedCntObjPtr.
     acquired: Guard::AcquiredPtr<T>,
+    _marker: PhantomData<&'g ()>,
 }
 
-impl<T, Guard> SnapshotPtr<T, Guard>
+impl<'g, T, Guard> SnapshotPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {
     pub fn new(acquired: Guard::AcquiredPtr<T>) -> Self {
-        Self { acquired }
+        Self {
+            acquired,
+            _marker: PhantomData
+        }
     }
 
-    pub(crate) unsafe fn deref_counted(&self, _: &Guard) -> &CountedObject<T> {
+    pub(crate) unsafe fn deref_counted(&self) -> &'g CountedObject<T> {
         self.acquired.deref_counted()
     }
 
-    pub(crate) unsafe fn deref_counted_mut(&mut self, _: &Guard) -> &mut CountedObject<T> {
+    pub(crate) unsafe fn deref_counted_mut(&mut self) -> &'g mut CountedObject<T> {
         self.acquired.deref_counted_mut()
     }
 
     /// # Safety
     /// TODO
-    pub unsafe fn deref(&self, guard: &Guard) -> &T {
-        self.deref_counted(guard).data()
+    pub unsafe fn deref(&self) -> &'g T {
+        self.deref_counted().data()
     }
 
     /// # Safety
     /// TODO
-    pub unsafe fn deref_mut(&mut self, guard: &Guard) -> &mut T {
-        self.deref_counted_mut(guard).data_mut()
+    pub unsafe fn deref_mut(&mut self) -> &'g mut T {
+        self.deref_counted_mut().data_mut()
     }
 
-    pub fn as_ref(&self, guard: &Guard) -> Option<&T> {
+    pub fn as_ref(&self) -> Option<&'g T> {
         if self.is_null() {
             None
         } else {
-            Some(unsafe { self.deref(guard) })
+            Some(unsafe { self.deref() })
         }
     }
 
@@ -65,7 +71,7 @@ where
     }
 }
 
-impl<T, Guard> Drop for SnapshotPtr<T, Guard>
+impl<'g, T, Guard> Drop for SnapshotPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {
@@ -76,7 +82,7 @@ where
     }
 }
 
-impl<T, Guard> PartialEq for SnapshotPtr<T, Guard>
+impl<'g, T, Guard> PartialEq for SnapshotPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {

@@ -17,6 +17,9 @@ where
     _marker: PhantomData<Guard>,
 }
 
+unsafe impl<T, Guard: AcquireRetire> Send for AtomicRcPtr<T, Guard> {}
+unsafe impl<T, Guard: AcquireRetire> Sync for AtomicRcPtr<T, Guard> {}
+
 // Ensure that MarkedPtr<T> is 8-byte long,
 // so that lock-free atomic operations are possible.
 const_assert!(Atomic::<MarkedCntObjPtr<u8>>::is_lock_free());
@@ -26,6 +29,14 @@ impl<T, Guard> AtomicRcPtr<T, Guard>
 where
     Guard: AcquireRetire,
 {
+    pub fn new(obj: T, guard: &Guard) -> Self {
+        let ptr = RcPtr::make_shared(obj, guard);
+        Self {
+            link: Atomic::new(ptr.release()),
+            _marker: PhantomData,
+        }
+    }
+
     pub fn null() -> Self {
         Self {
             link: Atomic::new(MarkedPtr::null()),
@@ -40,7 +51,7 @@ where
         }
     }
 
-    pub fn store_rc(&self, desired: RcPtr<T, Guard>, order: Ordering, guard: &Guard) {
+    pub fn store(&self, desired: RcPtr<T, Guard>, order: Ordering, guard: &Guard) {
         let new_ptr = desired.release();
         let old_ptr = self.link.swap(new_ptr, order);
         if !old_ptr.is_null() {
@@ -49,7 +60,7 @@ where
     }
 
     /// A variation of `store_rc` which use relaxed load/store instead of swap
-    pub fn store_rc_relaxed(&self, desired: RcPtr<T, Guard>, guard: &Guard) {
+    pub fn store_relaxed(&self, desired: RcPtr<T, Guard>, guard: &Guard) {
         let new_ptr = desired.release();
         let old_ptr = self.link.load(Ordering::Relaxed);
         self.link.store(new_ptr, Ordering::Release);
@@ -92,7 +103,7 @@ where
         }
     }
 
-    pub fn load_rc(&self, guard: &Guard) -> RcPtr<T, Guard> {
+    pub fn load<'g>(&self, guard: &'g Guard) -> RcPtr<'g, T, Guard> {
         let acquired = guard.acquire(&self.link);
         RcPtr::new_with_incr(acquired.as_counted_ptr(), guard)
     }
@@ -109,16 +120,89 @@ where
         RcPtr::new_without_incr(self.link.swap(new_ptr, Ordering::SeqCst))
     }
 
-    pub fn compare_exchange(
+    pub fn compare_exchange_weak<'g>(
         &self,
-        expected: RcPtr<T, Guard>,
-        desired: RcPtr<T, Guard>,
-        guard: &Guard,
-    ) -> bool {
-        self.compare_exchange_inner(expected.as_counted_ptr(), desired.release(), guard)
+        expected: &RcPtr<'g, T, Guard>,
+        desired: &RcPtr<'g, T, Guard>,
+        guard: &'g Guard,
+    ) -> Result<(), RcPtr<'g, T, Guard>> {
+        if self.compare_exchange(expected, desired, guard) {
+            Err(self.load(guard))
+        } else {
+            Ok(())
+        }
     }
 
-    fn compare_exchange_inner(
+    pub fn compare_exchange_weak_snapshot<'g>(
+        &self,
+        expected: &SnapshotPtr<T, Guard>,
+        desired: &RcPtr<'g, T, Guard>,
+        guard: &'g Guard,
+    ) -> Result<(), SnapshotPtr<T, Guard>> {
+        if self.compare_exchange_snapshot(expected, desired, guard) {
+            Err(self.load_snapshot(guard))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Atomically compares the underlying RcPtr with expected, and if they refer to
+    /// the same managed object, replaces the current RcPtr with a copy of desired
+    /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    pub fn compare_exchange(
+        &self,
+        expected: &RcPtr<T, Guard>,
+        desired: &RcPtr<T, Guard>,
+        guard: &Guard,
+    ) -> bool {
+        // We need to make a reservation if the desired snapshot pointer no longer has
+        // an announcement slot. Otherwise, desired is protected, assuming that another
+        // thread can not clear the announcement slot (this might change one day!)
+        let _reservation = if desired.is_protected() {
+            guard.reserve_nothing()
+        } else {
+            guard.reserve(desired.as_counted_ptr().unmarked())
+        };
+
+        let desired_ptr = desired.as_counted_ptr();
+        if self.compare_exchange_impl(expected.as_counted_ptr(), desired_ptr, guard) {
+            if !desired_ptr.is_null() {
+                unsafe { guard.increment_ref_cnt(desired_ptr.unmarked()) };
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /// Atomically compares the underlying SnapshotPtr with expected, and if they refer to
+    /// the same managed object, replaces the current SnapshotPtr with a copy of desired
+    /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    pub fn compare_exchange_snapshot(
+        &self,
+        expected: &SnapshotPtr<T, Guard>,
+        desired: &RcPtr<T, Guard>,
+        guard: &Guard,
+    ) -> bool {
+        // We need to make a reservation if the desired snapshot pointer no longer has
+        // an announcement slot. Otherwise, desired is protected, assuming that another
+        // thread can not clear the announcement slot (this might change one day!)
+        let _reservation = if desired.is_protected() {
+            guard.reserve_nothing()
+        } else {
+            guard.reserve(desired.as_counted_ptr().unmarked())
+        };
+
+        let desired_ptr = desired.as_counted_ptr();
+        if self.compare_exchange_impl(expected.as_counted_ptr(), desired_ptr, guard) {
+            if !desired_ptr.is_null() {
+                unsafe { guard.increment_ref_cnt(desired_ptr.unmarked()) };
+            }
+            return true;
+        }
+        return false;
+    }
+
+    fn compare_exchange_impl(
         &self,
         expected: MarkedCntObjPtr<T>,
         desired: MarkedCntObjPtr<T>,
@@ -134,7 +218,20 @@ where
             }
             return true;
         }
-        false
+        return false;
+    }
+
+    pub fn fetch_mark<'g>(&self, mark: usize, guard: &'g Guard) -> RcPtr<'g, T, Guard> {
+        let mut cur = self.link.load(Ordering::SeqCst);
+        let mut new = cur.with_mark(mark);
+        while let Err(actual) =
+            self.link
+                .compare_exchange_weak(cur, new, Ordering::SeqCst, Ordering::SeqCst)
+        {
+            cur = actual;
+            new = actual.with_mark(mark);
+        }
+        RcPtr::new_with_incr(cur, guard)
     }
 }
 

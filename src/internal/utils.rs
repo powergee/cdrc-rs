@@ -250,23 +250,23 @@ impl<T> MarkedPtr<T> {
         (ptr & !low_bits::<T>()) as *mut T
     }
 
-    pub fn marked(&self, mark: usize) -> Self {
-        Self::new(marked(self.ptr, mark))
+    pub fn with_mark(&self, mark: usize) -> Self {
+        Self::new(with_mark(self.ptr, mark))
     }
 
     pub fn set_ptr(&mut self, ptr: *mut T) {
-        self.ptr = marked(ptr, self.mark());
+        self.ptr = with_mark(ptr, self.mark());
     }
 
     pub fn set_mark(&mut self, mark: usize) {
-        self.ptr = marked(self.ptr, mark);
+        self.ptr = with_mark(self.ptr, mark);
     }
 
-    pub unsafe fn deref(&self) -> &T {
+    pub unsafe fn deref<'g>(&self) -> &'g T {
         &*self.unmarked()
     }
 
-    pub unsafe fn deref_mut(&mut self) -> &mut T {
+    pub unsafe fn deref_mut<'g>(&mut self) -> &'g mut T {
         &mut *self.unmarked()
     }
 }
@@ -279,7 +279,7 @@ const fn low_bits<T>() -> usize {
 
 /// Returns the pointer with the given mark
 #[inline]
-fn marked<T>(ptr: *mut T, mark: usize) -> *mut T {
+fn with_mark<T>(ptr: *mut T, mark: usize) -> *mut T {
     ((ptr as usize & !low_bits::<T>()) | (mark & low_bits::<T>())) as *mut T
 }
 

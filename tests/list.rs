@@ -1,5 +1,4 @@
-#![feature(inherent_associated_types)]
-use cdrc_rs::{AtomicRcPtr, RcPtr, AcquireRetire};
+use cdrc_rs::{AcquireRetire, AtomicRcPtr, RcPtr};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem;
@@ -20,39 +19,41 @@ where
 {
     /// Mark: tag(), Tag: not needed
     next: AtomicRcPtr<Self, Guard>,
-    key: Option<K>,
-    value: Option<V>,
+    key: K,
+    value: V,
 }
 
 struct List<K, V, Guard>
 where
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
 {
     head: AtomicRcPtr<Node<K, V, Guard>, Guard>,
 }
 
-// impl<K, V, Guard> Default for List<K, V, Guard>
-// where
-//     K: Ord,
-//     Guard: AcquireRetire
-// {
-//     fn default() -> Self {
-//         Self::new()
-//     }
-// }
+impl<K, V, Guard> Default for List<K, V, Guard>
+where
+    K: Ord + Default,
+    V: Default,
+    Guard: AcquireRetire,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl<K, V, Guard> Drop for List<K, V, Guard>
 where
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
 {
     fn drop(&mut self) {
         let guard = &Guard::handle();
         unsafe {
-            let mut curr = self.head.load_rc(guard);
+            let mut curr = self.head.load(guard);
+            let mut next;
 
             while !curr.is_null() {
                 let curr_ref = curr.deref_mut();
-                let next = curr_ref.next.load_rc(guard);
+                next = curr_ref.next.load(guard);
                 curr_ref.next.store_null(guard);
                 curr = next;
             }
@@ -62,59 +63,63 @@ where
 
 impl<K, V, Guard> Node<K, V, Guard>
 where
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
+    K: Default,
+    V: Default
 {
     /// Creates a new node.
     fn new(key: K, value: V) -> Self {
         Self {
             next: AtomicRcPtr::null(),
-            key: Some(key),
-            value: Some(value),
+            key,
+            value,
         }
     }
 
+    /// Creates a dummy head.
+    /// We never deref key and value of this head node.
     fn head() -> Self {
         Self {
             next: AtomicRcPtr::null(),
-            key: None,
-            value: None,
+            key: K::default(),
+            value: V::default(),
         }
     }
 }
 
-struct Cursor<K, V, Guard>
+struct Cursor<'g, K, V, Guard>
 where
-    Guard: AcquireRetire
+    Guard: AcquireRetire,
 {
-    prev: RcPtr<Node<K, V, Guard>, Guard>,
+    prev: RcPtr<'g, Node<K, V, Guard>, Guard>,
     // Tag of `curr` should always be zero so when `curr` is stored in a `prev`, we don't store a
     // marked pointer and cause cleanup to fail.
-    curr: RcPtr<Node<K, V, Guard>, Guard>,
+    curr: RcPtr<'g, Node<K, V, Guard>, Guard>,
 }
 
-impl<K, V, Guard> Cursor<K, V, Guard>
+impl<'g, K, V, Guard> Cursor<'g, K, V, Guard>
 where
     K: Ord,
     Guard: AcquireRetire,
 {
     /// Creates a cursor.
-    fn new(head: &AtomicRcPtr<Node<K, V, Guard>, Guard>, guard: &Guard) -> Self {
-        let prev = head.load_rc(guard);
-        let curr = unsafe { prev.deref() }.next.load_rc(guard);
+    fn new(head: &AtomicRcPtr<Node<K, V, Guard>, Guard>, guard: &'g Guard) -> Self {
+        let prev = head.load(guard);
+        let curr = unsafe { prev.deref() }.next.load(guard);
         Self { prev, curr }
     }
 
     /// Clean up a chain of logically removed nodes in each traversal.
     #[inline]
-    fn find_harris(&mut self, key: &K, guard: &Guard) -> Result<bool, ()> {
+    fn find_harris(&mut self, key: &K, guard: &'g Guard) -> Result<bool, ()> {
         // Finding phase
         // - cursor.curr: first unmarked node w/ key >= search key (4)
         // - cursor.prev: the ref of .next in previous unmarked node (1 -> 2)
         // 1 -> 2 -x-> 3 -x-> 4 -> 5 -> ∅  (search key: 4)
         let mut prev_next = self.curr.clone(guard);
         let found = loop {
-            let curr_node = some_or!(self.curr.as_ref(), break false);
-            let next = curr_node.next.load_rc(guard);
+            let curr_node = some_or!(unsafe { self.curr.as_ref() }, break false);
+            let next = curr_node.next.load(guard);
 
             // - finding stage is done if cursor.curr advancement stops
             // - advance cursor.curr if (.next is marked) || (cursor.curr < key)
@@ -127,7 +132,7 @@ where
                 continue;
             }
 
-            match curr_node.key.as_ref().unwrap().cmp(key) {
+            match curr_node.key.cmp(key) {
                 Less => {
                     mem::swap(&mut self.prev, &mut self.curr);
                     self.curr = next.clone(guard);
@@ -144,21 +149,18 @@ where
         }
 
         // cleanup marked nodes between prev and curr
-        if unsafe { self.prev.deref() }
+        if !unsafe { self.prev.deref() }
             .next
-            .compare_exchange(
-                prev_next.clone(guard),
-                self.curr.clone(guard),
-                guard,
-            ) {
-                return Err(());
-            }
+            .compare_exchange(&prev_next, &self.curr, guard)
+        {
+            return Err(());
+        }
 
         // defer_destroy from cursor.prev.load() to cursor.curr (exclusive)
         let mut node = prev_next;
         while !node.eq_without_tag(&self.curr) {
             let node_ref = unsafe { node.deref() };
-            let next = node_ref.next.load_rc(guard);
+            let next = node_ref.next.load(guard);
             node_ref.next.store_null(guard);
             node = next;
         }
@@ -168,25 +170,26 @@ where
 
     /// gets the value.
     #[inline]
-    pub fn get(&self) -> Option<&V> {
-        self.curr.as_ref().map(|n| n.value.as_ref().unwrap())
+    pub fn get(&self) -> Option<&'g V> {
+        unsafe { self.curr.as_ref() }.map(|n| &n.value)
     }
 
     /// Inserts a value.
     #[inline]
     pub fn insert(
         &mut self,
-        node: RcPtr<Node<K, V, Guard>, Guard>,
-        guard: &Guard,
-    ) -> Result<(), RcPtr<Node<K, V, Guard>, Guard>> {
+        node: RcPtr<'g, Node<K, V, Guard>, Guard>,
+        guard: &'g Guard,
+    ) -> Result<(), RcPtr<'g, Node<K, V, Guard>, Guard>> {
         let curr = mem::take(&mut self.curr);
-        unsafe { node.deref() }.next.store_rc_relaxed(curr.clone(guard), guard);
+        unsafe { node.deref() }
+            .next
+            .store_relaxed(curr.clone(guard), guard);
 
-        if unsafe { self.prev.deref() }.next.compare_exchange(
-            curr,
-            node.clone(guard),
-            guard,
-        ) {
+        if unsafe { self.prev.deref() }
+            .next
+            .compare_exchange(&curr, &node, guard)
+        {
             self.curr = node;
             Ok(())
         } else {
@@ -196,31 +199,223 @@ where
 
     /// removes the current node.
     #[inline]
-    pub fn remove(self, guard: &Guard) -> Result<&V, ()> {
+    pub fn remove(self, guard: &'g Guard) -> Result<&'g V, ()> {
         let curr_node = unsafe { self.curr.deref() };
 
-        let next_unmarked = curr_node.next.load_rc(guard);
-        if next_unmarked.mark() != 0 {
+        let next = curr_node.next.fetch_mark(1, guard);
+        if next.mark() == 1 {
             return Err(());
         }
 
-        let next_marked = next_unmarked.with_mark(1);
-        if curr_node.next.compare_exchange(next_unmarked, desired, guard) {
-            todo!()
-        }
-        let next = curr_node.next.fetch_or(1, Ordering::Acquire, guard);
-        if next.tag() == 1 {
-            return Err(());
-        }
-
-        if self
-            .prev
-            .compare_exchange(self.curr, next, Ordering::Release, Ordering::Relaxed, guard)
-            .is_ok()
-        {
-            unsafe { guard.defer_destroy(self.curr) };
-        }
+        unsafe { self.prev.deref() }
+            .next
+            .compare_exchange(&self.curr, &next, guard);
 
         Ok(&curr_node.value)
+    }
+}
+
+impl<K, V, Guard> List<K, V, Guard>
+where
+    K: Ord + Default,
+    V: Default,
+    Guard: AcquireRetire,
+{
+    /// Creates a new list.
+    pub fn new() -> Self {
+        List {
+            head: AtomicRcPtr::new(Node::head(), &Guard::handle()),
+        }
+    }
+
+    /// Creates the head cursor.
+    #[inline]
+    pub fn head<'g>(&'g self, guard: &'g Guard) -> Cursor<'g, K, V, Guard> {
+        Cursor::new(&self.head, guard)
+    }
+
+    /// Finds a key using the given find strategy.
+    #[inline]
+    fn find<'g, F>(&'g self, key: &K, find: &F, guard: &'g Guard) -> (bool, Cursor<'g, K, V, Guard>)
+    where
+        F: Fn(&mut Cursor<'g, K, V, Guard>, &K, &'g Guard) -> Result<bool, ()>,
+    {
+        loop {
+            let mut cursor = self.head(guard);
+            if let Ok(r) = find(&mut cursor, key, guard) {
+                return (r, cursor);
+            }
+        }
+    }
+
+    #[inline]
+    fn get<'g, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<&'g V>
+    where
+        F: Fn(&mut Cursor<'g, K, V, Guard>, &K, &'g Guard) -> Result<bool, ()>,
+    {
+        let (found, cursor) = self.find(key, &find, guard);
+        if found {
+            cursor.get()
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn insert<'g, F>(&'g self, key: K, value: V, find: F, guard: &'g Guard) -> bool
+    where
+        F: Fn(&mut Cursor<'g, K, V, Guard>, &K, &'g Guard) -> Result<bool, ()>,
+    {
+        let mut node = RcPtr::make_shared(Node::new(key, value), guard);
+        loop {
+            let (found, mut cursor) =
+                self.find(&unsafe { node.deref() }.key, &find, guard);
+            if found {
+                return false;
+            }
+
+            match cursor.insert(node, guard) {
+                Err(n) => node = n,
+                Ok(()) => return true,
+            }
+        }
+    }
+
+    #[inline]
+    fn remove<'g, F>(&'g self, key: &K, find: F, guard: &'g Guard) -> Option<&'g V>
+    where
+        F: Fn(&mut Cursor<'g, K, V, Guard>, &K, &'g Guard) -> Result<bool, ()>,
+    {
+        loop {
+            let (found, cursor) = self.find(key, &find, guard);
+            if !found {
+                return None;
+            }
+
+            match cursor.remove(guard) {
+                Err(()) => continue,
+                Ok(value) => return Some(value),
+            }
+        }
+    }
+
+    /// Omitted
+    pub fn harris_get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.get(key, Cursor::find_harris, guard)
+    }
+
+    /// Omitted
+    pub fn harris_insert<'g>(&'g self, key: K, value: V, guard: &'g Guard) -> bool {
+        self.insert(key, value, Cursor::find_harris, guard)
+    }
+
+    /// Omitted
+    pub fn harris_remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.remove(key, Cursor::find_harris, guard)
+    }
+}
+
+pub struct HList<K, V, Guard>
+where
+    Guard: AcquireRetire,
+{
+    inner: List<K, V, Guard>,
+}
+
+impl<K, V, Guard> ConcurrentMap<K, V, Guard> for HList<K, V, Guard>
+where
+    K: Ord + Default,
+    V: Default,
+    Guard: AcquireRetire,
+{
+    fn new() -> Self {
+        HList { inner: List::new() }
+    }
+
+    #[inline]
+    fn get<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_get(key, guard)
+    }
+    #[inline]
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool {
+        self.inner.harris_insert(key, value, guard)
+    }
+    #[inline]
+    fn remove<'g>(&'g self, key: &K, guard: &'g Guard) -> Option<&'g V> {
+        self.inner.harris_remove(key, guard)
+    }
+}
+
+pub trait ConcurrentMap<K, V, Guard> {
+    fn new() -> Self;
+    fn get<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V>;
+    fn insert(&self, key: K, value: V, guard: &Guard) -> bool;
+    fn remove<'g>(&'g self, key: &'g K, guard: &'g Guard) -> Option<&'g V>;
+}
+
+#[cfg(test)]
+pub mod tests {
+    extern crate rand;
+    use super::ConcurrentMap;
+    use cdrc_rs::{AcquireRetire, GuardEBR};
+    use crossbeam_utils::thread;
+    use rand::prelude::*;
+    use super::HList;
+
+    const THREADS: i32 = 30;
+    const ELEMENTS_PER_THREADS: i32 = 1000;
+
+    pub fn smoke<Guard: AcquireRetire, M: ConcurrentMap<i32, String, Guard> + Send + Sync>() {
+        let map = &M::new();
+
+        thread::scope(|s| {
+            for t in 0..THREADS {
+                s.spawn(move |_| {
+                    let mut rng = rand::thread_rng();
+                    let mut keys: Vec<i32> =
+                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
+                    keys.shuffle(&mut rng);
+                    for i in keys {
+                        assert!(map.insert(i, i.to_string(), &Guard::handle()));
+                    }
+                });
+            }
+        })
+        .unwrap();
+
+        thread::scope(|s| {
+            for t in 0..(THREADS / 2) {
+                s.spawn(move |_| {
+                    let mut rng = rand::thread_rng();
+                    let mut keys: Vec<i32> =
+                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
+                    keys.shuffle(&mut rng);
+                    for i in keys {
+                        assert_eq!(i.to_string(), *map.remove(&i, &Guard::handle()).unwrap());
+                    }
+                });
+            }
+        })
+        .unwrap();
+
+        thread::scope(|s| {
+            for t in (THREADS / 2)..THREADS {
+                s.spawn(move |_| {
+                    let mut rng = rand::thread_rng();
+                    let mut keys: Vec<i32> =
+                        (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
+                    keys.shuffle(&mut rng);
+                    for i in keys {
+                        assert_eq!(i.to_string(), *map.get(&i, &Guard::handle()).unwrap());
+                    }
+                });
+            }
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn smoke_ebr_h_list() {
+        smoke::<GuardEBR, HList<i32, String, GuardEBR>>();
     }
 }

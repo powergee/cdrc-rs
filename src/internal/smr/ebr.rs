@@ -6,14 +6,12 @@ use crate::internal::utils::CountedObject;
 use crate::internal::{AcquireRetire, AcquiredPtr, MarkedCntObjPtr, RetireType};
 
 pub struct GuardEBR {
-    guard: crossbeam_epoch::Guard
+    guard: crossbeam_epoch::Guard,
 }
 
 impl From<crossbeam_epoch::Guard> for GuardEBR {
     fn from(guard: crossbeam_epoch::Guard) -> Self {
-        Self {
-            guard
-        }
+        Self { guard }
     }
 }
 
@@ -25,11 +23,11 @@ impl From<crossbeam_epoch::Guard> for GuardEBR {
 pub struct AcquiredPtrEBR<T>(MarkedCntObjPtr<T>);
 
 impl<T> AcquiredPtr<T> for AcquiredPtrEBR<T> {
-    unsafe fn deref_counted(&self) -> &CountedObject<T> {
+    unsafe fn deref_counted<'g>(&self) -> &'g CountedObject<T> {
         self.0.deref()
     }
 
-    unsafe fn deref_counted_mut(&mut self) -> &mut CountedObject<T> {
+    unsafe fn deref_counted_mut<'g>(&mut self) -> &'g mut CountedObject<T> {
         self.0.deref_mut()
     }
 
@@ -83,7 +81,10 @@ impl AcquireRetire for GuardEBR {
         AcquiredPtrEBR(MarkedCntObjPtr::null())
     }
 
-    fn protect_snapshot<T>(&self, link: &atomic::Atomic<MarkedCntObjPtr<T>>) -> Self::AcquiredPtr<T> {
+    fn protect_snapshot<T>(
+        &self,
+        link: &atomic::Atomic<MarkedCntObjPtr<T>>,
+    ) -> Self::AcquiredPtr<T> {
         let ptr = link.load(Ordering::Acquire);
         if !ptr.is_null() && unsafe { ptr.deref() }.use_count() == 0 {
             AcquiredPtrEBR(MarkedCntObjPtr::null())

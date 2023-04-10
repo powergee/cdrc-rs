@@ -12,6 +12,6 @@ pub use snapshot_ptr::SnapshotPtr;
 /// AtomicRcPtr using EBR
 pub type AtomicRcPtrEBR<T> = AtomicRcPtr<T, GuardEBR>;
 /// RcPtr using EBR
-pub type RcPtrEBR<T> = RcPtr<T, GuardEBR>;
+pub type RcPtrEBR<'g, T> = RcPtr<'g, T, GuardEBR>;
 /// SnapshotPtr using EBR
-pub type SnapshotPtrEBR<T> = SnapshotPtr<T, GuardEBR>;
+pub type SnapshotPtrEBR<'g, T> = SnapshotPtr<'g, T, GuardEBR>;
