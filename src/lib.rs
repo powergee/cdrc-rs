@@ -3,14 +3,15 @@ mod internal;
 mod rc_ptr;
 mod snapshot_ptr;
 
+pub use internal::{AcquireRetire, AcquiredPtr, CountedObject, EjectAction, GuardEBR, RetireType};
+
 pub use atomic_rc_ptr::AtomicRcPtr;
-pub use internal::GuardEBR;
 pub use rc_ptr::RcPtr;
 pub use snapshot_ptr::SnapshotPtr;
 
 /// AtomicRcPtr using EBR
-pub type AtomicRcPtrEBR<T> = AtomicRcPtr<T, GuardEBR<T>>;
+pub type AtomicRcPtrEBR<T> = AtomicRcPtr<T, GuardEBR>;
 /// RcPtr using EBR
-pub type RcPtrEBR<T> = RcPtr<T, GuardEBR<T>>;
+pub type RcPtrEBR<T> = RcPtr<T, GuardEBR>;
 /// SnapshotPtr using EBR
-pub type SnapshotPtrEBR<T> = SnapshotPtr<T, GuardEBR<T>>;
+pub type SnapshotPtrEBR<T> = SnapshotPtr<T, GuardEBR>;

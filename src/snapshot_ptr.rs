@@ -1,17 +1,19 @@
-use crate::internal::{AcquireRetire, AcquiredPtr, CountedObjPtr, CountedObject};
+use crate::internal::{AcquireRetire, AcquiredPtr, MarkedCntObjPtr, CountedObject};
 
 pub struct SnapshotPtr<T, Guard>
 where
-    Guard: AcquireRetire<T>,
+    Guard: AcquireRetire,
 {
-    acquired: Guard::AcquiredPtr,
+    // Guard::AcquiredPtr is usually a wrapper struct
+    // containing MarkedCntObjPtr.
+    acquired: Guard::AcquiredPtr<T>,
 }
 
 impl<T, Guard> SnapshotPtr<T, Guard>
 where
-    Guard: AcquireRetire<T>,
+    Guard: AcquireRetire,
 {
-    pub fn new(acquired: Guard::AcquiredPtr) -> Self {
+    pub fn new(acquired: Guard::AcquiredPtr<T>) -> Self {
         Self { acquired }
     }
 
@@ -25,14 +27,22 @@ where
 
     /// # Safety
     /// TODO
-    pub unsafe fn deref_data(&self, guard: &Guard) -> &T {
+    pub unsafe fn deref(&self, guard: &Guard) -> &T {
         self.deref_counted(guard).data()
     }
 
     /// # Safety
     /// TODO
-    pub unsafe fn deref_data_mut(&mut self, guard: &Guard) -> &mut T {
+    pub unsafe fn deref_mut(&mut self, guard: &Guard) -> &mut T {
         self.deref_counted_mut(guard).data_mut()
+    }
+
+    pub fn as_ref(&self, guard: &Guard) -> Option<&T> {
+        if self.is_null() {
+            None
+        } else {
+            Some(unsafe { self.deref(guard) })
+        }
     }
 
     pub fn is_null(&self) -> bool {
@@ -46,7 +56,7 @@ where
         self.acquired.clear_protection();
     }
 
-    pub fn as_counted_ptr(&self) -> CountedObjPtr<T> {
+    pub fn as_counted_ptr(&self) -> MarkedCntObjPtr<T> {
         self.acquired.as_counted_ptr()
     }
 
@@ -57,7 +67,7 @@ where
 
 impl<T, Guard> Drop for SnapshotPtr<T, Guard>
 where
-    Guard: AcquireRetire<T>,
+    Guard: AcquireRetire,
 {
     fn drop(&mut self) {
         if !self.is_null() && !self.acquired.is_protected() {
@@ -68,7 +78,7 @@ where
 
 impl<T, Guard> PartialEq for SnapshotPtr<T, Guard>
 where
-    Guard: AcquireRetire<T>,
+    Guard: AcquireRetire,
 {
     fn eq(&self, other: &Self) -> bool {
         self.acquired.eq(&other.acquired)

@@ -213,9 +213,7 @@ impl<T> Default for MarkedPtr<T> {
 
 impl<T> Clone for MarkedPtr<T> {
     fn clone(&self) -> Self {
-        Self {
-            ptr: self.ptr,
-        }
+        Self { ptr: self.ptr }
     }
 }
 
@@ -252,6 +250,10 @@ impl<T> MarkedPtr<T> {
         (ptr & !low_bits::<T>()) as *mut T
     }
 
+    pub fn marked(&self, mark: usize) -> Self {
+        Self::new(marked(self.ptr, mark))
+    }
+
     pub fn set_ptr(&mut self, ptr: *mut T) {
         self.ptr = marked(ptr, self.mark());
     }
@@ -281,4 +283,4 @@ fn marked<T>(ptr: *mut T, mark: usize) -> *mut T {
     ((ptr as usize & !low_bits::<T>()) | (mark & low_bits::<T>())) as *mut T
 }
 
-pub(crate) type CountedObjPtr<T> = MarkedPtr<CountedObject<T>>;
+pub(crate) type MarkedCntObjPtr<T> = MarkedPtr<CountedObject<T>>;

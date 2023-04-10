@@ -1,23 +1,23 @@
 use std::marker::PhantomData;
 
 use crate::{
-    internal::{AcquireRetire, Count, CountedObjPtr, MarkedPtr},
+    internal::{AcquireRetire, Count, MarkedCntObjPtr, MarkedPtr},
     snapshot_ptr::SnapshotPtr,
 };
 
 pub struct RcPtr<T, Guard>
 where
-    Guard: AcquireRetire<T>,
+    Guard: AcquireRetire,
 {
-    ptr: CountedObjPtr<T>,
+    ptr: MarkedCntObjPtr<T>,
     _marker: PhantomData<Guard>,
 }
 
 impl<T, Guard> RcPtr<T, Guard>
 where
-    Guard: AcquireRetire<T>,
+    Guard: AcquireRetire,
 {
-    pub(crate) fn new_with_incr(ptr: CountedObjPtr<T>, guard: &Guard) -> Self {
+    pub(crate) fn new_with_incr(ptr: MarkedCntObjPtr<T>, guard: &Guard) -> Self {
         let rc = Self {
             ptr,
             _marker: PhantomData,
@@ -26,7 +26,7 @@ where
         rc
     }
 
-    pub(crate) fn new_without_incr(ptr: CountedObjPtr<T>) -> Self {
+    pub(crate) fn new_without_incr(ptr: MarkedCntObjPtr<T>) -> Self {
         Self {
             ptr,
             _marker: PhantomData,
@@ -45,7 +45,7 @@ where
     pub fn make_shared(obj: T, guard: &Guard) -> Self {
         let ptr = guard.create_object(obj);
         Self {
-            ptr: CountedObjPtr::new(ptr),
+            ptr: MarkedCntObjPtr::new(ptr),
             _marker: PhantomData,
         }
     }
@@ -70,6 +70,14 @@ where
         self.ptr.is_null()
     }
 
+    pub fn as_ref(&self) -> Option<&T> {
+        if self.is_null() {
+            None
+        } else {
+            Some(unsafe { self.deref() })
+        }
+    }
+
     /// # Safety
     /// TODO
     pub unsafe fn deref(&self) -> &T {
@@ -90,22 +98,56 @@ where
         unsafe { self.ptr.deref().weak_count() }
     }
 
-    pub fn release(self) -> CountedObjPtr<T> {
+    pub fn release(self) -> MarkedCntObjPtr<T> {
         self.ptr
     }
 
-    pub fn as_counted_ptr(&self) -> CountedObjPtr<T> {
+    pub(crate) fn as_counted_ptr(&self) -> MarkedCntObjPtr<T> {
         self.ptr
+    }
+
+    pub fn mark(&self) -> usize {
+        self.ptr.mark()
+    }
+
+    pub fn unmarked(self) -> Self {
+        Self::new_without_incr(MarkedCntObjPtr::new(self.ptr.unmarked()))
+    }
+
+    pub fn with_mark(self, mark: usize) -> Self {
+        Self::new_without_incr(self.ptr.marked(mark))
+    }
+
+    pub fn eq_without_tag(&self, rhs: &Self) -> bool {
+        self.as_counted_ptr().unmarked() == rhs.as_counted_ptr().unmarked()
     }
 }
 
 impl<T, Guard> Drop for RcPtr<T, Guard>
 where
-    Guard: AcquireRetire<T>,
+    Guard: AcquireRetire,
 {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
             self.clear(&Guard::handle());
         }
+    }
+}
+
+impl<T, Guard> PartialEq for RcPtr<T, Guard>
+where
+    Guard: AcquireRetire,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.ptr == other.ptr
+    }
+}
+
+impl<T, Guard> Default for RcPtr<T, Guard>
+where
+    Guard: AcquireRetire,
+{
+    fn default() -> Self {
+        Self { ptr: MarkedPtr::null(), _marker: Default::default() }
     }
 }

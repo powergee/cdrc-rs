@@ -1,21 +1,18 @@
-use std::marker::PhantomData;
 use std::mem;
 
 use atomic::Ordering;
 
 use crate::internal::utils::CountedObject;
-use crate::internal::{AcquireRetire, AcquiredPtr, CountedObjPtr, RetireType};
+use crate::internal::{AcquireRetire, AcquiredPtr, MarkedCntObjPtr, RetireType};
 
-pub struct GuardEBR<T> {
-    guard: crossbeam_epoch::Guard,
-    _marker: PhantomData<T>,
+pub struct GuardEBR {
+    guard: crossbeam_epoch::Guard
 }
 
-impl<T> From<crossbeam_epoch::Guard> for GuardEBR<T> {
+impl From<crossbeam_epoch::Guard> for GuardEBR {
     fn from(guard: crossbeam_epoch::Guard) -> Self {
         Self {
-            guard,
-            _marker: PhantomData,
+            guard
         }
     }
 }
@@ -25,7 +22,7 @@ impl<T> From<crossbeam_epoch::Guard> for GuardEBR<T> {
 /// We may want to use `crossbeam_ebr::Shared` as a `AcquiredPtr`,
 /// but trait interfaces can be complicated because `crossbeam_ebr::Shared`
 /// requires to specify a lifetime specifier.
-pub struct AcquiredPtrEBR<T>(CountedObjPtr<T>);
+pub struct AcquiredPtrEBR<T>(MarkedCntObjPtr<T>);
 
 impl<T> AcquiredPtr<T> for AcquiredPtrEBR<T> {
     unsafe fn deref_counted(&self) -> &CountedObject<T> {
@@ -36,7 +33,7 @@ impl<T> AcquiredPtr<T> for AcquiredPtrEBR<T> {
         self.0.deref_mut()
     }
 
-    fn as_counted_ptr(&self) -> CountedObjPtr<T> {
+    fn as_counted_ptr(&self) -> MarkedCntObjPtr<T> {
         self.0
     }
 
@@ -62,34 +59,34 @@ impl<T> AcquiredPtr<T> for AcquiredPtrEBR<T> {
     }
 }
 
-impl<T> AcquireRetire<T> for GuardEBR<T> {
-    type AcquiredPtr = AcquiredPtrEBR<T>;
+impl AcquireRetire for GuardEBR {
+    type AcquiredPtr<T> = AcquiredPtrEBR<T>;
 
     fn handle() -> Self {
         Self::from(crossbeam_epoch::pin())
     }
 
-    fn create_object(&self, obj: T) -> *mut CountedObject<T> {
+    fn create_object<T>(&self, obj: T) -> *mut CountedObject<T> {
         let obj = CountedObject::new(obj);
         Box::into_raw(Box::new(obj))
     }
 
-    fn acquire(&self, link: &atomic::Atomic<CountedObjPtr<T>>) -> Self::AcquiredPtr {
+    fn acquire<T>(&self, link: &atomic::Atomic<MarkedCntObjPtr<T>>) -> Self::AcquiredPtr<T> {
         AcquiredPtrEBR(link.load(Ordering::Acquire))
     }
 
-    fn reserve(&self, ptr: *mut CountedObject<T>) -> Self::AcquiredPtr {
-        AcquiredPtrEBR(CountedObjPtr::new(ptr))
+    fn reserve<T>(&self, ptr: *mut CountedObject<T>) -> Self::AcquiredPtr<T> {
+        AcquiredPtrEBR(MarkedCntObjPtr::new(ptr))
     }
 
-    fn reserve_nothing(&self) -> Self::AcquiredPtr {
-        AcquiredPtrEBR(CountedObjPtr::null())
+    fn reserve_nothing<T>(&self) -> Self::AcquiredPtr<T> {
+        AcquiredPtrEBR(MarkedCntObjPtr::null())
     }
 
-    fn protect_snapshot(&self, link: &atomic::Atomic<CountedObjPtr<T>>) -> Self::AcquiredPtr {
+    fn protect_snapshot<T>(&self, link: &atomic::Atomic<MarkedCntObjPtr<T>>) -> Self::AcquiredPtr<T> {
         let ptr = link.load(Ordering::Acquire);
         if !ptr.is_null() && unsafe { ptr.deref() }.use_count() == 0 {
-            AcquiredPtrEBR(CountedObjPtr::null())
+            AcquiredPtrEBR(MarkedCntObjPtr::null())
         } else {
             AcquiredPtrEBR(ptr)
         }
@@ -99,11 +96,11 @@ impl<T> AcquireRetire<T> for GuardEBR<T> {
         // For EBR, there's no action which is equivalent to releasing.
     }
 
-    unsafe fn delete_object(&self, ptr: *mut CountedObject<T>) {
+    unsafe fn delete_object<T>(&self, ptr: *mut CountedObject<T>) {
         drop(Box::from_raw(ptr));
     }
 
-    unsafe fn retire(&self, ptr: *mut CountedObject<T>, ret_type: RetireType) {
+    unsafe fn retire<T>(&self, ptr: *mut CountedObject<T>, ret_type: RetireType) {
         self.guard.defer_unchecked(move || {
             let inner_guard = Self::handle();
             inner_guard.eject(ptr, ret_type);

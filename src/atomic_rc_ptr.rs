@@ -1,30 +1,38 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, mem};
 
 use atomic::{Atomic, Ordering};
 use static_assertions::const_assert;
 
 use crate::{
-    internal::{AcquireRetire, AcquiredPtr, CountedObjPtr, MarkedPtr},
+    internal::{AcquireRetire, AcquiredPtr, MarkedCntObjPtr, MarkedPtr},
     rc_ptr::RcPtr,
     snapshot_ptr::SnapshotPtr,
 };
 
 pub struct AtomicRcPtr<T, Guard>
 where
-    Guard: AcquireRetire<T>,
+    Guard: AcquireRetire,
 {
-    link: Atomic<CountedObjPtr<T>>,
+    link: Atomic<MarkedCntObjPtr<T>>,
     _marker: PhantomData<Guard>,
 }
 
 // Ensure that MarkedPtr<T> is 8-byte long,
 // so that lock-free atomic operations are possible.
-const_assert!(Atomic::<CountedObjPtr<u8>>::is_lock_free());
+const_assert!(Atomic::<MarkedCntObjPtr<u8>>::is_lock_free());
+const_assert!(mem::size_of::<MarkedCntObjPtr<u8>>() == mem::size_of::<*mut u8>());
 
 impl<T, Guard> AtomicRcPtr<T, Guard>
 where
-    Guard: AcquireRetire<T>,
+    Guard: AcquireRetire,
 {
+    pub fn null() -> Self {
+        Self {
+            link: Atomic::new(MarkedPtr::null()),
+            _marker: PhantomData,
+        }
+    }
+
     pub fn store_null(&self, guard: &Guard) {
         let old = self.link.swap(MarkedPtr::null(), Ordering::SeqCst);
         if !old.is_null() {
@@ -84,12 +92,12 @@ where
         }
     }
 
-    pub fn load(&self, guard: &Guard) -> RcPtr<T, Guard> {
+    pub fn load_rc(&self, guard: &Guard) -> RcPtr<T, Guard> {
         let acquired = guard.acquire(&self.link);
         RcPtr::new_with_incr(acquired.as_counted_ptr(), guard)
     }
 
-    pub fn take_snapshot(&self, guard: &Guard) -> SnapshotPtr<T, Guard> {
+    pub fn load_snapshot(&self, guard: &Guard) -> SnapshotPtr<T, Guard> {
         SnapshotPtr::new(guard.protect_snapshot(&self.link))
     }
 
@@ -112,8 +120,8 @@ where
 
     fn compare_exchange_inner(
         &self,
-        expected: CountedObjPtr<T>,
-        desired: CountedObjPtr<T>,
+        expected: MarkedCntObjPtr<T>,
+        desired: MarkedCntObjPtr<T>,
         guard: &Guard,
     ) -> bool {
         if self
@@ -130,21 +138,9 @@ where
     }
 }
 
-impl<T, Guard> Default for AtomicRcPtr<T, Guard>
-where
-    Guard: AcquireRetire<T>,
-{
-    fn default() -> Self {
-        Self {
-            link: Atomic::new(MarkedPtr::null()),
-            _marker: PhantomData,
-        }
-    }
-}
-
 impl<T, Guard> Drop for AtomicRcPtr<T, Guard>
 where
-    Guard: AcquireRetire<T>,
+    Guard: AcquireRetire,
 {
     fn drop(&mut self) {
         let ptr = self.link.load(Ordering::SeqCst);
