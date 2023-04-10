@@ -22,7 +22,9 @@ where
             ptr,
             _marker: PhantomData,
         };
-        unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
+        if !ptr.is_null() {
+            unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
+        }
         rc
     }
 
@@ -38,7 +40,9 @@ where
             ptr: ptr.as_counted_ptr(),
             _marker: PhantomData,
         };
-        unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
+        if !ptr.is_null() {
+            unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
+        }
         rc
     }
 
@@ -55,7 +59,9 @@ where
             ptr: self.ptr,
             _marker: PhantomData,
         };
-        unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
+        if !rc.ptr.is_null() {
+            unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
+        }
         rc
     }
 
@@ -98,8 +104,10 @@ where
         unsafe { self.ptr.deref().weak_count() }
     }
 
-    pub fn release(self) -> MarkedCntObjPtr<T> {
-        self.ptr
+    pub fn release(mut self) -> MarkedCntObjPtr<T> {
+        let res = self.ptr;
+        self.ptr = MarkedCntObjPtr::null();
+        res
     }
 
     pub(crate) fn as_counted_ptr(&self) -> MarkedCntObjPtr<T> {
@@ -110,12 +118,14 @@ where
         self.ptr.mark()
     }
 
-    pub fn unmarked(self) -> Self {
-        Self::new_without_incr(MarkedCntObjPtr::new(self.ptr.unmarked()))
+    pub fn unmarked(mut self) -> Self {
+        self.ptr = MarkedCntObjPtr::new(self.ptr.unmarked());
+        self
     }
 
-    pub fn with_mark(self, mark: usize) -> Self {
-        Self::new_without_incr(self.ptr.with_mark(mark))
+    pub fn with_mark(mut self, mark: usize) -> Self {
+        self.ptr.set_mark(mark);
+        self
     }
 
     pub fn eq_without_tag(&self, rhs: &Self) -> bool {
