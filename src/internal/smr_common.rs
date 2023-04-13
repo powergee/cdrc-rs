@@ -28,7 +28,7 @@ pub trait Handle {
     /// all thread-local entities if necessary.
     unsafe fn reset_registrations();
 
-    /// Register current Pthread as a participant.
+    /// Register current thread as a participant.
     fn register() -> Self;
     /// Pin current thread, which involves begining its
     /// critical section.

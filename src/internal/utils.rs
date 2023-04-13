@@ -188,7 +188,6 @@ impl<T> CountedObject<T> {
                 // Immediately destroy the managed object and
                 // collect the control data, since no more
                 // live (strong or weak) references exist
-                unsafe { self.dispose() };
                 EjectAction::Destroy
             } else {
                 // At least one weak reference exists, so we have to

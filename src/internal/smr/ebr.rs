@@ -20,6 +20,7 @@ const UNPROTECTED_TID: usize = usize::MAX;
 struct Record {
     ptr: *mut CountedObject<u8>,
     deleter: unsafe fn(*mut CountedObject<u8>),
+    disposer: unsafe fn(*mut CountedObject<u8>),
     retire_ts: Option<Epoch>,
     ret_type: Option<RetireType>,
 }
@@ -29,6 +30,7 @@ impl Record {
         Self {
             ptr: ptr as *mut _,
             deleter: delete::<T>,
+            disposer: dispose::<T>,
             retire_ts: None,
             ret_type: None,
         }
@@ -127,7 +129,7 @@ impl BaseEBR {
 
     unsafe fn dispose(&self, record: Record) {
         assert!((*record.ptr).use_count() == 0);
-        (*record.ptr).dispose();
+        (record.disposer)(record.ptr);
         if (*record.ptr).release_weak_refs(1) {
             self.destroy(record);
         }
@@ -158,7 +160,10 @@ impl BaseEBR {
         match result {
             EjectAction::Nothing => {}
             EjectAction::Delay => self.retire(tid, record.as_dispose()),
-            EjectAction::Destroy => self.destroy(record),
+            EjectAction::Destroy => {
+                (record.disposer)(record.ptr);
+                self.destroy(record);
+            }
         }
     }
 
@@ -201,7 +206,7 @@ impl BaseEBR {
         // Always attempt at least 30 ejects
         let threshold = 30.max(EJECT_DELAY * self.num_threads());
 
-        while !self.in_progress[tid].get() && self.eject_work[tid].get() > threshold {
+        while !self.in_progress[tid].get() && self.eject_work[tid].get() >= threshold {
             self.eject_work[tid].set(0);
             if self.deferred.is_empty() {
                 // nothing to collect
@@ -427,4 +432,9 @@ impl<T> AcquiredPtr<T> for AcquiredPtrEBR<T> {
 unsafe fn delete<T>(obj: *mut CountedObject<u8>) {
     let obj = obj as *mut CountedObject<T>;
     unsafe { drop(Box::from_raw(obj)) };
+}
+
+unsafe fn dispose<T>(obj: *mut CountedObject<u8>) {
+    let obj = obj as *mut CountedObject<T>;
+    (*obj).dispose();
 }

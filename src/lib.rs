@@ -1,3 +1,4 @@
+#![feature(associated_type_bounds)]
 mod atomic_rc_ptr;
 mod internal;
 mod rc_ptr;

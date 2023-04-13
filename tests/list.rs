@@ -195,14 +195,13 @@ where
         node: RcPtr<'g, Node<K, V, Guard>, Guard>,
         guard: &'g Guard,
     ) -> Result<(), RcPtr<'g, Node<K, V, Guard>, Guard>> {
-        let curr = mem::replace(&mut self.curr, RcPtr::null(guard));
         unsafe { node.deref() }
             .next
-            .store_relaxed(curr.clone(guard), guard);
+            .store_relaxed(self.curr.clone(guard), guard);
 
         if unsafe { self.prev.deref() }
             .next
-            .compare_exchange(&curr, &node, guard)
+            .compare_exchange(&self.curr, &node, guard)
         {
             self.curr = node;
             Ok(())
@@ -238,9 +237,7 @@ where
     /// Creates a new list.
     pub fn new() -> Self {
         List {
-            head: AtomicRcPtr::new(Node::head(), unsafe {
-                mem::transmute(Guard::unprotected())
-            }),
+            head: AtomicRcPtr::new(Node::head(), unsafe { Guard::unprotected() }),
         }
     }
 
