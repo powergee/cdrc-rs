@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use crate::{
     internal::{AcquireRetire, Count, MarkedCntObjPtr, MarkedPtr},
     snapshot_ptr::SnapshotPtr,
@@ -10,35 +8,33 @@ where
     Guard: AcquireRetire,
 {
     ptr: MarkedCntObjPtr<T>,
-    _marker: PhantomData<(&'g (), Guard)>,
+    guard: &'g Guard,
 }
 
 impl<'g, T, Guard> RcPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {
+    pub fn null(guard: &'g Guard) -> Self {
+        Self::new_without_incr(MarkedCntObjPtr::null(), guard)
+    }
+
     pub(crate) fn new_with_incr(ptr: MarkedCntObjPtr<T>, guard: &'g Guard) -> Self {
-        let rc = Self {
-            ptr,
-            _marker: PhantomData,
-        };
+        let rc = Self { ptr, guard };
         if !ptr.is_null() {
             unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
         }
         rc
     }
 
-    pub(crate) fn new_without_incr(ptr: MarkedCntObjPtr<T>) -> Self {
-        Self {
-            ptr,
-            _marker: PhantomData,
-        }
+    pub(crate) fn new_without_incr(ptr: MarkedCntObjPtr<T>, guard: &'g Guard) -> Self {
+        Self { ptr, guard }
     }
 
     pub fn from_snapshot(ptr: &SnapshotPtr<'g, T, Guard>, guard: &'g Guard) -> Self {
         let rc = Self {
             ptr: ptr.as_counted_ptr(),
-            _marker: PhantomData,
+            guard,
         };
         if !ptr.is_null() {
             unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
@@ -50,14 +46,14 @@ where
         let ptr = guard.create_object(obj);
         Self {
             ptr: MarkedCntObjPtr::new(ptr),
-            _marker: PhantomData,
+            guard,
         }
     }
 
     pub fn clone(&self, guard: &'g Guard) -> Self {
         let rc = Self {
             ptr: self.ptr,
-            _marker: PhantomData,
+            guard,
         };
         if !rc.ptr.is_null() {
             unsafe { guard.increment_ref_cnt(rc.ptr.unmarked()) };
@@ -143,7 +139,7 @@ where
 {
     fn drop(&mut self) {
         if !self.ptr.is_null() {
-            self.clear(&Guard::handle());
+            self.clear(self.guard);
         }
     }
 }
@@ -154,17 +150,5 @@ where
 {
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr
-    }
-}
-
-impl<'g, T, Guard> Default for RcPtr<'g, T, Guard>
-where
-    Guard: AcquireRetire,
-{
-    fn default() -> Self {
-        Self {
-            ptr: MarkedPtr::null(),
-            _marker: Default::default(),
-        }
     }
 }

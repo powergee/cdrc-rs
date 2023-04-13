@@ -1,13 +1,38 @@
 use atomic::Atomic;
 
 use crate::internal::utils::CountedObject;
-use crate::internal::utils::EjectAction;
 use crate::internal::utils::MarkedCntObjPtr;
 
+#[derive(Clone, Copy)]
 pub enum RetireType {
     DecrementStrongCount,
     DecrementWeakCount,
     Dispose,
+}
+
+/// A SMR-specific handle trait
+///
+/// `Handle` is responsible for configuring the SMR options,
+/// registering each thread and creating `Guard` before entering
+/// a critical section. While registering, a thread-local entity
+/// must be properly initialized according to the SMR.
+pub trait Handle {
+    /// A SMR-specific critical section guard trait
+    type Guard: AcquireRetire;
+
+    /// Set the maximum allowed number of participants.
+    /// This function must be called before actually
+    /// using the garbage collector.
+    unsafe fn set_max_threads(threads: usize);
+    /// Unregister all participants and re-initialize
+    /// all thread-local entities if necessary.
+    unsafe fn reset_registrations();
+
+    /// Register current Pthread as a participant.
+    fn register() -> Self;
+    /// Pin current thread, which involves begining its
+    /// critical section.
+    fn pin(&self) -> Self::Guard;
 }
 
 /// A SMR-specific acquired pointer trait
@@ -34,7 +59,7 @@ pub trait AcquiredPtr<T> {
     fn eq(&self, other: &Self) -> bool;
 }
 
-/// A SMR-specific memory managing trait
+/// A SMR-specific critical section guard trait
 pub trait AcquireRetire {
     /// A SMR-specific acquired pointer trait
     ///
@@ -43,7 +68,7 @@ pub trait AcquireRetire {
 
     /* SMR-specific protecting & releasing */
 
-    fn handle() -> Self;
+    unsafe fn unprotected<'g>() -> &'g Self;
     fn create_object<T>(&self, obj: T) -> *mut CountedObject<T>;
     fn acquire<T>(&self, link: &Atomic<MarkedCntObjPtr<T>>) -> Self::AcquiredPtr<T>;
     /// Like `acquire`, but assuming that the caller already has a
@@ -57,75 +82,11 @@ pub trait AcquireRetire {
     /// another snapshot containing the pointer.
     fn reserve_snapshot<T>(&self, ptr: MarkedCntObjPtr<T>) -> Self::AcquiredPtr<T>;
     fn release(&self);
-    unsafe fn delete_object<T>(&self, ptr: *mut CountedObject<T>);
-    unsafe fn retire<T>(&self, ptr: *mut CountedObject<T>, ret_type: RetireType);
 
-    /* Public interfaces for CDRC operations */
-
-    unsafe fn dispose<T>(&self, ptr: *mut CountedObject<T>) {
-        assert!((*ptr).use_count() == 0);
-        (*ptr).dispose();
-        if (*ptr).release_weak_refs(1) {
-            self.destroy(ptr);
-        }
-    }
-
-    unsafe fn destroy<T>(&self, ptr: *mut CountedObject<T>) {
-        assert!((*ptr).use_count() == 0);
-        self.delete_object(ptr);
-    }
-
-    /// Perform an eject action. This can correspond to any action that
-    /// should be delayed until the ptr is no longer protected
-    unsafe fn eject<T>(&self, ptr: *mut CountedObject<T>, ret_type: RetireType) {
-        assert!(!ptr.is_null());
-
-        match ret_type {
-            RetireType::DecrementStrongCount => self.decrement_ref_cnt(ptr),
-            RetireType::DecrementWeakCount => self.decrement_weak_cnt(ptr),
-            RetireType::Dispose => self.dispose(ptr),
-        }
-    }
-
-    unsafe fn increment_ref_cnt<T>(&self, ptr: *mut CountedObject<T>) -> bool {
-        assert!(!ptr.is_null());
-        (*ptr).add_refs(1)
-    }
-
-    unsafe fn increment_weak_cnt<T>(&self, ptr: *mut CountedObject<T>) -> bool {
-        assert!(!ptr.is_null());
-        (*ptr).add_weak_refs(1)
-    }
-
-    unsafe fn decrement_ref_cnt<T>(&self, ptr: *mut CountedObject<T>) {
-        assert!(!ptr.is_null());
-        assert!((*ptr).use_count() >= 1);
-        let result = (*ptr).release_refs(1);
-
-        match result {
-            EjectAction::Nothing => {}
-            EjectAction::Delay => self.retire(ptr, RetireType::Dispose),
-            EjectAction::Destroy => self.destroy(ptr),
-        }
-    }
-
-    unsafe fn decrement_weak_cnt<T>(&self, ptr: *mut CountedObject<T>) {
-        assert!(!ptr.is_null());
-        assert!((*ptr).weak_count() >= 1);
-        if (*ptr).release_weak_refs(1) {
-            self.destroy(ptr);
-        }
-    }
-
-    unsafe fn delayed_decrement_ref_cnt<T>(&self, ptr: *mut CountedObject<T>) {
-        assert!((*ptr).use_count() >= 1);
-        self.retire(ptr, RetireType::DecrementStrongCount);
-    }
-
-    unsafe fn delayed_decrement_weak_cnt<T>(&self, ptr: *mut CountedObject<T>) {
-        assert!((*ptr).weak_count() >= 1);
-        self.retire(ptr, RetireType::DecrementWeakCount);
-    }
-
-    /* Interfaces to access & manage the acquired pointer */
+    unsafe fn increment_ref_cnt<T>(&self, ptr: *mut CountedObject<T>) -> bool;
+    unsafe fn increment_weak_cnt<T>(&self, ptr: *mut CountedObject<T>) -> bool;
+    unsafe fn decrement_ref_cnt<T>(&self, ptr: *mut CountedObject<T>);
+    unsafe fn decrement_weak_cnt<T>(&self, ptr: *mut CountedObject<T>);
+    unsafe fn delayed_decrement_ref_cnt<T>(&self, ptr: *mut CountedObject<T>);
+    unsafe fn delayed_decrement_weak_cnt<T>(&self, ptr: *mut CountedObject<T>);
 }

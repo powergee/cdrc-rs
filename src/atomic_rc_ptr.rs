@@ -108,16 +108,16 @@ where
         RcPtr::new_with_incr(acquired.as_counted_ptr(), guard)
     }
 
-    pub fn load_snapshot(&self, guard: &Guard) -> SnapshotPtr<T, Guard> {
-        SnapshotPtr::new(guard.protect_snapshot(&self.link))
+    pub fn load_snapshot<'g>(&self, guard: &'g Guard) -> SnapshotPtr<'g, T, Guard> {
+        SnapshotPtr::new(guard.protect_snapshot(&self.link), guard)
     }
 
     /// Swap the currently stored shared pointer with the given shared pointer.
     /// This operation is thread-safe.
     /// (It is equivalent to `exchange` from the original implementation.)
-    pub fn swap(&self, desired: RcPtr<T, Guard>) -> RcPtr<T, Guard> {
+    pub fn swap<'g>(&self, desired: RcPtr<T, Guard>, guard: &'g Guard) -> RcPtr<'g, T, Guard> {
         let new_ptr = desired.release();
-        RcPtr::new_without_incr(self.link.swap(new_ptr, Ordering::SeqCst))
+        RcPtr::new_without_incr(self.link.swap(new_ptr, Ordering::SeqCst), guard)
     }
 
     pub fn compare_exchange_weak<'g>(
@@ -138,7 +138,7 @@ where
         expected: &SnapshotPtr<T, Guard>,
         desired: &RcPtr<'g, T, Guard>,
         guard: &'g Guard,
-    ) -> Result<(), SnapshotPtr<T, Guard>> {
+    ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
         if self.compare_exchange_snapshot(expected, desired, guard) {
             Err(self.load_snapshot(guard))
         } else {
@@ -171,7 +171,7 @@ where
             }
             return true;
         }
-        return false;
+        false
     }
 
     /// Atomically compares the underlying SnapshotPtr with expected, and if they refer to
@@ -199,7 +199,7 @@ where
             }
             return true;
         }
-        return false;
+        false
     }
 
     fn compare_exchange_impl(
@@ -218,7 +218,7 @@ where
             }
             return true;
         }
-        return false;
+        false
     }
 
     pub fn fetch_mark<'g>(&self, mark: usize, guard: &'g Guard) -> RcPtr<'g, T, Guard> {
@@ -241,8 +241,11 @@ where
 {
     fn drop(&mut self) {
         let ptr = self.link.load(Ordering::SeqCst);
-        if !ptr.is_null() {
-            unsafe { Guard::handle().delayed_decrement_ref_cnt(ptr.unmarked()) };
+        unsafe {
+            if !ptr.is_null() {
+                let guard = Guard::unprotected();
+                guard.delayed_decrement_ref_cnt(ptr.unmarked());
+            }
         }
     }
 }

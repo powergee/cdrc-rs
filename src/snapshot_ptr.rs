@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use crate::internal::{AcquireRetire, AcquiredPtr, MarkedCntObjPtr};
 
 pub struct SnapshotPtr<'g, T: 'g, Guard: 'g>
@@ -9,22 +7,19 @@ where
     // Guard::AcquiredPtr is usually a wrapper struct
     // containing MarkedCntObjPtr.
     acquired: Guard::AcquiredPtr<T>,
-    _marker: PhantomData<&'g ()>,
+    guard: &'g Guard,
 }
 
 impl<'g, T, Guard> SnapshotPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {
-    pub fn new(acquired: Guard::AcquiredPtr<T>) -> Self {
-        Self {
-            acquired,
-            _marker: PhantomData,
-        }
+    pub fn new(acquired: Guard::AcquiredPtr<T>, guard: &'g Guard) -> Self {
+        Self { acquired, guard }
     }
 
     pub fn clone(&self, guard: &'g Guard) -> Self {
-        Self::new(guard.reserve_snapshot(self.as_counted_ptr()))
+        Self::new(guard.reserve_snapshot(self.as_counted_ptr()), guard)
     }
 
     /// # Safety
@@ -88,7 +83,7 @@ where
 {
     fn drop(&mut self) {
         if !self.is_null() && !self.acquired.is_protected() {
-            self.clear(&Guard::handle())
+            self.clear(self.guard)
         }
     }
 }

@@ -2,9 +2,8 @@ use atomic::{Atomic, Ordering};
 use core::mem;
 use static_assertions::const_assert;
 use std::{
-    mem::ManuallyDrop,
-    ptr,
-    sync::atomic::{compiler_fence, AtomicBool},
+    ptr::{self, NonNull},
+    sync::atomic::compiler_fence,
 };
 
 pub(crate) type Count = u32;
@@ -122,34 +121,40 @@ pub enum EjectAction {
 
 /// An instance of an object of type T with an atomic reference count.
 pub struct CountedObject<T> {
-    storage: ManuallyDrop<T>,
+    storage: Option<NonNull<T>>,
     ref_cnt: StickyCounter,
     weak_cnt: StickyCounter,
-    disposed: AtomicBool,
 }
 
 impl<T> CountedObject<T> {
     pub fn new(val: T) -> Self {
         Self {
-            storage: ManuallyDrop::new(val),
+            storage: unsafe { Some(NonNull::new_unchecked(Box::into_raw(Box::new(val)))) },
             ref_cnt: StickyCounter::new(),
             weak_cnt: StickyCounter::new(),
-            disposed: AtomicBool::new(false),
         }
     }
 
     pub fn data(&self) -> &T {
-        &self.storage
+        if let Some(ptr) = self.storage {
+            unsafe { ptr.as_ref() }
+        } else {
+            panic!("`CountedObject` is already disposed");
+        }
     }
 
     pub fn data_mut(&mut self) -> &mut T {
-        &mut self.storage
+        if let Some(mut ptr) = self.storage {
+            unsafe { ptr.as_mut() }
+        } else {
+            panic!("`CountedObject` is already disposed");
+        }
     }
 
     /// Destroy the managed object, but keep the control data intact
     pub unsafe fn dispose(&mut self) {
-        self.disposed.store(true, Ordering::Release);
-        ManuallyDrop::drop(&mut self.storage)
+        let data = self.storage.take().unwrap();
+        drop(Box::from_raw(data.as_ptr()));
     }
 
     pub fn use_count(&self) -> Count {
@@ -208,7 +213,7 @@ impl<T> CountedObject<T> {
 
 impl<T> Drop for CountedObject<T> {
     fn drop(&mut self) {
-        assert!(self.disposed.load(Ordering::Acquire));
+        assert!(self.storage.is_none());
     }
 }
 
