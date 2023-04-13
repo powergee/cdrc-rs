@@ -93,10 +93,14 @@ impl Drop for BaseEBR {
             // deferred lists because a destruction may trigger another
             // deferred destruction to be added to one of the lists, which
             // would invalidate its iterators
-            for def in mem::take(&mut self.deferred) {
-                for def in def.into_inner().into_inner() {
-                    unsafe { self.eject(0, def) };
-                }
+            let jobs = self
+                .deferred
+                .iter()
+                .flat_map(|deferred| deferred.take())
+                .collect::<Vec<_>>();
+
+            for job in jobs {
+                unsafe { self.eject(0, job) };
             }
         }
     }
