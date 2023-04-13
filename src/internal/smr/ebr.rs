@@ -99,6 +99,7 @@ impl Drop for BaseEBR {
                 .flat_map(|deferred| deferred.take())
                 .collect::<Vec<_>>();
 
+            // Perform all of the pending deferred ejects
             for job in jobs {
                 unsafe { self.eject(0, job) };
             }
