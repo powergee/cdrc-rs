@@ -228,3 +228,12 @@ where
         }
     }
 }
+
+impl<T, Guard> Default for AtomicRcPtr<T, Guard>
+where
+    Guard: AcquireRetire,
+{
+    fn default() -> Self {
+        Self::null()
+    }
+}
