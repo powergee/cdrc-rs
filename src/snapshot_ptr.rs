@@ -17,6 +17,13 @@ where
     pub fn new(acquired: Guard::AcquiredPtr<T>, guard: &'g Guard) -> Self {
         Self { acquired, guard }
     }
+    
+    pub fn null(guard: &'g Guard) -> Self {
+        Self {
+            acquired: <Guard as AcquireRetire>::AcquiredPtr::null(),
+            guard
+        }
+    }
 
     pub fn clone(&self, guard: &'g Guard) -> Self {
         Self::new(guard.reserve_snapshot(self.as_counted_ptr()), guard)

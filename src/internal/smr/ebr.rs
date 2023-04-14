@@ -407,6 +407,10 @@ impl<T> AcquiredPtr<T> for AcquiredPtrEBR<T> {
         self.0
     }
 
+    fn null() -> Self {
+        Self(MarkedCntObjPtr::null())
+    }
+
     fn is_null(&self) -> bool {
         self.0.is_null()
     }
