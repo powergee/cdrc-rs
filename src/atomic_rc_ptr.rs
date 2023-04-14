@@ -200,15 +200,15 @@ where
         }
     }
 
-    pub fn fetch_mark<'g>(&self, mark: usize, guard: &'g Guard) -> RcPtr<'g, T, Guard> {
+    pub fn fetch_or<'g>(&self, mark: usize, guard: &'g Guard) -> RcPtr<'g, T, Guard> {
         let mut cur = self.link.load(Ordering::SeqCst);
-        let mut new = cur.with_mark(mark);
+        let mut new = cur.with_mark(cur.mark() | mark);
         while let Err(actual) =
             self.link
                 .compare_exchange_weak(cur, new, Ordering::SeqCst, Ordering::SeqCst)
         {
             cur = actual;
-            new = actual.with_mark(mark);
+            new = actual.with_mark(cur.mark() | mark);
         }
         RcPtr::new_with_incr(cur, guard)
     }
