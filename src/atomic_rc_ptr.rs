@@ -282,7 +282,7 @@ where
         let ptr = self.link.load(Ordering::SeqCst);
         unsafe {
             if !ptr.is_null() {
-                let guard = Guard::unprotected();
+                let guard = Guard::handle();
                 guard.delayed_decrement_ref_cnt(ptr.unmarked());
             }
         }

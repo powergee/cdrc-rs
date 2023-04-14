@@ -5,7 +5,7 @@ mod rc_ptr;
 mod snapshot_ptr;
 
 pub use internal::{
-    AcquireRetire, AcquiredPtr, CountedObject, EjectAction, GuardEBR, Handle, HandleEBR, RetireType,
+    AcquireRetire, AcquiredPtr, CountedObject, EjectAction, GuardEBR, RetireType,
 };
 
 pub use atomic_rc_ptr::AtomicRcPtr;

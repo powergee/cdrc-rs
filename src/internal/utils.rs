@@ -2,8 +2,9 @@ use atomic::{Atomic, Ordering};
 use core::mem;
 use static_assertions::const_assert;
 use std::{
-    ptr::{self, NonNull},
-    sync::atomic::compiler_fence,
+    mem::ManuallyDrop,
+    ptr,
+    sync::atomic::{compiler_fence, AtomicBool},
 };
 
 pub(crate) type Count = u32;
@@ -121,40 +122,34 @@ pub enum EjectAction {
 
 /// An instance of an object of type T with an atomic reference count.
 pub struct CountedObject<T> {
-    storage: Option<NonNull<T>>,
+    storage: ManuallyDrop<T>,
     ref_cnt: StickyCounter,
     weak_cnt: StickyCounter,
+    disposed: AtomicBool,
 }
 
 impl<T> CountedObject<T> {
     pub fn new(val: T) -> Self {
         Self {
-            storage: unsafe { Some(NonNull::new_unchecked(Box::into_raw(Box::new(val)))) },
+            storage: ManuallyDrop::new(val),
             ref_cnt: StickyCounter::new(),
             weak_cnt: StickyCounter::new(),
+            disposed: AtomicBool::new(false),
         }
     }
 
     pub fn data(&self) -> &T {
-        if let Some(ptr) = self.storage {
-            unsafe { ptr.as_ref() }
-        } else {
-            panic!("`CountedObject` is already disposed");
-        }
+        &self.storage
     }
 
     pub fn data_mut(&mut self) -> &mut T {
-        if let Some(mut ptr) = self.storage {
-            unsafe { ptr.as_mut() }
-        } else {
-            panic!("`CountedObject` is already disposed");
-        }
+        &mut self.storage
     }
 
     /// Destroy the managed object, but keep the control data intact
     pub unsafe fn dispose(&mut self) {
-        let data = self.storage.take().unwrap();
-        drop(Box::from_raw(data.as_ptr()));
+        self.disposed.store(true, Ordering::Release);
+        ManuallyDrop::drop(&mut self.storage)
     }
 
     pub fn use_count(&self) -> Count {
@@ -188,6 +183,7 @@ impl<T> CountedObject<T> {
                 // Immediately destroy the managed object and
                 // collect the control data, since no more
                 // live (strong or weak) references exist
+                unsafe { self.dispose() };
                 EjectAction::Destroy
             } else {
                 // At least one weak reference exists, so we have to
@@ -212,7 +208,7 @@ impl<T> CountedObject<T> {
 
 impl<T> Drop for CountedObject<T> {
     fn drop(&mut self) {
-        assert!(self.storage.is_none());
+        assert!(self.disposed.load(Ordering::Acquire));
     }
 }
 
