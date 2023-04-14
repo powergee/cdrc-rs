@@ -120,41 +120,15 @@ where
         RcPtr::new_without_incr(self.link.swap(new_ptr, Ordering::SeqCst), guard)
     }
 
-    pub fn compare_exchange_weak<'g>(
+    /// Atomically compares the underlying RcPtr with expected, and if they refer to
+    /// the same managed object, replaces the current RcPtr with a copy of desired
+    /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    pub fn compare_exchange<'g>(
         &self,
         expected: &RcPtr<'g, T, Guard>,
         desired: &RcPtr<'g, T, Guard>,
         guard: &'g Guard,
-    ) -> Result<(), RcPtr<'g, T, Guard>> {
-        if self.compare_exchange(expected, desired, guard) {
-            Err(self.load(guard))
-        } else {
-            Ok(())
-        }
-    }
-
-    pub fn compare_exchange_weak_snapshot<'g>(
-        &self,
-        expected: &SnapshotPtr<T, Guard>,
-        desired: &RcPtr<'g, T, Guard>,
-        guard: &'g Guard,
     ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
-        if self.compare_exchange_snapshot(expected, desired, guard) {
-            Err(self.load_snapshot(guard))
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Atomically compares the underlying RcPtr with expected, and if they refer to
-    /// the same managed object, replaces the current RcPtr with a copy of desired
-    /// (incrementing its reference count) and returns true. Otherwise, returns false.
-    pub fn compare_exchange(
-        &self,
-        expected: &RcPtr<T, Guard>,
-        desired: &RcPtr<T, Guard>,
-        guard: &Guard,
-    ) -> bool {
         // We need to make a reservation if the desired snapshot pointer no longer has
         // an announcement slot. Otherwise, desired is protected, assuming that another
         // thread can not clear the announcement slot (this might change one day!)
@@ -165,24 +139,26 @@ where
         };
 
         let desired_ptr = desired.as_counted_ptr();
-        if self.compare_exchange_impl(expected.as_counted_ptr(), desired_ptr, guard) {
-            if !desired_ptr.is_null() {
-                unsafe { guard.increment_ref_cnt(desired_ptr.unmarked()) };
+        match self.compare_exchange_impl(expected.as_counted_ptr(), desired_ptr, guard) {
+            Ok(()) => {
+                if !desired_ptr.is_null() {
+                    unsafe { guard.increment_ref_cnt(desired_ptr.unmarked()) };
+                }
+                Ok(())
             }
-            return true;
+            Err(current) => Err(current),
         }
-        false
     }
 
     /// Atomically compares the underlying SnapshotPtr with expected, and if they refer to
     /// the same managed object, replaces the current SnapshotPtr with a copy of desired
     /// (incrementing its reference count) and returns true. Otherwise, returns false.
-    pub fn compare_exchange_snapshot(
+    pub fn compare_exchange_snapshot<'g>(
         &self,
-        expected: &SnapshotPtr<T, Guard>,
-        desired: &RcPtr<T, Guard>,
-        guard: &Guard,
-    ) -> bool {
+        expected: &SnapshotPtr<'g, T, Guard>,
+        desired: &RcPtr<'g, T, Guard>,
+        guard: &'g Guard,
+    ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
         // We need to make a reservation if the desired snapshot pointer no longer has
         // an announcement slot. Otherwise, desired is protected, assuming that another
         // thread can not clear the announcement slot (this might change one day!)
@@ -193,32 +169,35 @@ where
         };
 
         let desired_ptr = desired.as_counted_ptr();
-        if self.compare_exchange_impl(expected.as_counted_ptr(), desired_ptr, guard) {
-            if !desired_ptr.is_null() {
-                unsafe { guard.increment_ref_cnt(desired_ptr.unmarked()) };
+        match self.compare_exchange_impl(expected.as_counted_ptr(), desired_ptr, guard) {
+            Ok(()) => {
+                if !desired_ptr.is_null() {
+                    unsafe { guard.increment_ref_cnt(desired_ptr.unmarked()) };
+                }
+                Ok(())
             }
-            return true;
+            Err(current) => Err(current),
         }
-        false
     }
 
-    fn compare_exchange_impl(
+    fn compare_exchange_impl<'g>(
         &self,
         expected: MarkedCntObjPtr<T>,
         desired: MarkedCntObjPtr<T>,
-        guard: &Guard,
-    ) -> bool {
-        if self
+        guard: &'g Guard,
+    ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
+        match self
             .link
             .compare_exchange(expected, desired, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
         {
-            if !expected.is_null() {
-                unsafe { guard.delayed_decrement_ref_cnt(expected.unmarked()) };
+            Ok(_) => {
+                if !expected.is_null() {
+                    unsafe { guard.delayed_decrement_ref_cnt(expected.unmarked()) };
+                }
+                Ok(())
             }
-            return true;
+            Err(current) => Err(SnapshotPtr::new(guard.reserve_snapshot(current), guard)),
         }
-        false
     }
 
     pub fn fetch_mark<'g>(&self, mark: usize, guard: &'g Guard) -> RcPtr<'g, T, Guard> {
