@@ -82,6 +82,10 @@ where
         }
         self
     }
+
+    pub fn as_usize(&self) -> usize {
+        self.as_counted_ptr().as_usize()
+    }
 }
 
 impl<'g, T, Guard> Drop for SnapshotPtr<'g, T, Guard>

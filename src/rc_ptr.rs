@@ -124,8 +124,8 @@ where
         self
     }
 
-    pub fn eq_without_tag(&self, rhs: &Self) -> bool {
-        self.as_counted_ptr().unmarked() == rhs.as_counted_ptr().unmarked()
+    pub fn as_usize(&self) -> usize {
+        self.ptr.as_usize()
     }
 
     pub fn is_protected(&self) -> bool {
