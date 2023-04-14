@@ -17,11 +17,11 @@ where
     pub fn new(acquired: Guard::AcquiredPtr<T>, guard: &'g Guard) -> Self {
         Self { acquired, guard }
     }
-    
+
     pub fn null(guard: &'g Guard) -> Self {
         Self {
             acquired: <Guard as AcquireRetire>::AcquiredPtr::null(),
-            guard
+            guard,
         }
     }
 
