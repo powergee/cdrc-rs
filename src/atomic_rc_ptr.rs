@@ -275,6 +275,26 @@ where
     }
 
     #[inline(always)]
+    pub fn compare_exchange_mark<'g>(
+        &self,
+        expected: &SnapshotPtr<'g, T, Guard>,
+        mark: usize,
+        guard: &'g Guard,
+    ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
+        let expected_ptr = expected.as_counted_ptr();
+        let desired_ptr = expected_ptr.with_mark(mark);
+        match self.link.compare_exchange(
+            expected_ptr,
+            desired_ptr,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => Ok(()),
+            Err(current) => Err(SnapshotPtr::new(guard.reserve_snapshot(current), guard)),
+        }
+    }
+
+    #[inline(always)]
     pub fn fetch_or<'g>(&self, mark: usize, guard: &'g Guard) -> SnapshotPtr<'g, T, Guard> {
         let mut cur = self.link.load(Ordering::SeqCst);
         let mut new = cur.with_mark(cur.mark() | mark);
