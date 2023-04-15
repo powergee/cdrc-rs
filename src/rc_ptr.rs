@@ -15,10 +15,12 @@ impl<'g, T, Guard> RcPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {
+    #[inline(always)]
     pub fn null(guard: &'g Guard) -> Self {
         Self::new_without_incr(MarkedCntObjPtr::null(), guard)
     }
 
+    #[inline(always)]
     pub(crate) fn new_with_incr(ptr: MarkedCntObjPtr<T>, guard: &'g Guard) -> Self {
         let rc = Self { ptr, guard };
         if !ptr.is_null() {
@@ -27,10 +29,12 @@ where
         rc
     }
 
+    #[inline(always)]
     pub(crate) fn new_without_incr(ptr: MarkedCntObjPtr<T>, guard: &'g Guard) -> Self {
         Self { ptr, guard }
     }
 
+    #[inline(always)]
     pub fn from_snapshot(ptr: &SnapshotPtr<'g, T, Guard>, guard: &'g Guard) -> Self {
         let rc = Self {
             ptr: ptr.as_counted_ptr(),
@@ -42,6 +46,7 @@ where
         rc
     }
 
+    #[inline(always)]
     pub fn make_shared(obj: T, guard: &'g Guard) -> Self {
         let ptr = guard.create_object(obj);
         Self {
@@ -50,6 +55,7 @@ where
         }
     }
 
+    #[inline(always)]
     pub fn clone(&self, guard: &'g Guard) -> Self {
         let rc = Self {
             ptr: self.ptr,
@@ -61,6 +67,7 @@ where
         rc
     }
 
+    #[inline(always)]
     pub fn clear(&mut self, guard: &Guard) {
         if !self.ptr.is_null() {
             unsafe { guard.decrement_ref_cnt(self.ptr.unmarked()) };
@@ -68,10 +75,12 @@ where
         self.ptr = MarkedPtr::null();
     }
 
+    #[inline(always)]
     pub fn is_null(&self) -> bool {
         self.ptr.is_null()
     }
 
+    #[inline(always)]
     pub unsafe fn as_ref(&self) -> Option<&'g T> {
         if self.is_null() {
             None
@@ -82,52 +91,63 @@ where
 
     /// # Safety
     /// TODO
+    #[inline(always)]
     pub unsafe fn deref(&self) -> &'g T {
         self.ptr.deref().data()
     }
 
     /// # Safety
     /// TODO
+    #[inline(always)]
     pub unsafe fn deref_mut(&mut self) -> &'g mut T {
         self.ptr.deref_mut().data_mut()
     }
 
+    #[inline(always)]
     pub fn use_count(&self) -> Count {
         unsafe { self.ptr.deref().use_count() }
     }
 
+    #[inline(always)]
     pub fn weak_count(&self) -> Count {
         unsafe { self.ptr.deref().weak_count() }
     }
 
+    #[inline(always)]
     pub fn release(mut self) -> MarkedCntObjPtr<T> {
         let res = self.ptr;
         self.ptr = MarkedCntObjPtr::null();
         res
     }
 
+    #[inline(always)]
     pub(crate) fn as_counted_ptr(&self) -> MarkedCntObjPtr<T> {
         self.ptr
     }
 
+    #[inline(always)]
     pub fn mark(&self) -> usize {
         self.ptr.mark()
     }
 
+    #[inline(always)]
     pub fn unmarked(mut self) -> Self {
         self.ptr = MarkedCntObjPtr::new(self.ptr.unmarked());
         self
     }
 
+    #[inline(always)]
     pub fn with_mark(mut self, mark: usize) -> Self {
         self.ptr.set_mark(mark);
         self
     }
 
+    #[inline(always)]
     pub fn as_usize(&self) -> usize {
         self.ptr.as_usize()
     }
 
+    #[inline(always)]
     pub fn is_protected(&self) -> bool {
         false
     }
@@ -137,6 +157,7 @@ impl<'g, T, Guard> Drop for RcPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {
+    #[inline(always)]
     fn drop(&mut self) {
         if !self.ptr.is_null() {
             self.clear(self.guard);
@@ -148,6 +169,7 @@ impl<'g, T, Guard> PartialEq for RcPtr<'g, T, Guard>
 where
     Guard: AcquireRetire,
 {
+    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr
     }

@@ -31,14 +31,17 @@ pub(crate) struct StickyCounter {
 const_assert!(Atomic::<Count>::is_lock_free());
 
 impl StickyCounter {
+    #[inline(always)]
     const fn zero_flag() -> Count {
         1 << (mem::size_of::<Count>() * 8 - 1)
     }
 
+    #[inline(always)]
     const fn zero_pending_flag() -> Count {
         1 << (mem::size_of::<Count>() * 8 - 2)
     }
 
+    #[inline(always)]
     pub fn new() -> Self {
         Self { x: Atomic::new(1) }
     }
@@ -47,6 +50,7 @@ impl StickyCounter {
     ///
     /// Returns true if the increment was successful, i.e., the counter
     /// was not stuck at zero. Returns false if the counter was zero
+    #[inline(always)]
     pub fn increment(&self, add: Count, order: Ordering) -> bool {
         let val = self.x.fetch_add(add, order);
         (val & Self::zero_flag()) == 0
@@ -58,6 +62,7 @@ impl StickyCounter {
     ///
     /// Returns true if the counter was decremented to zero. Returns
     /// false if the counter was not decremented to zero
+    #[inline(always)]
     pub fn decrement(&self, sub: Count, order: Ordering) -> bool {
         if self.x.fetch_sub(sub, order) == sub {
             match self
@@ -78,6 +83,7 @@ impl StickyCounter {
 
     /// Loads the current value of the counter. If the current value is zero, it is guaranteed
     /// to remain zero until the counter is reset
+    #[inline(always)]
     pub fn load(&self, order: Ordering) -> Count {
         let val = self.x.load(order);
         if val != 0 {
@@ -107,6 +113,7 @@ impl StickyCounter {
 }
 
 impl From<Count> for StickyCounter {
+    #[inline(always)]
     fn from(value: Count) -> Self {
         Self {
             x: Atomic::new(if value == 0 { Self::zero_flag() } else { value }),
@@ -129,6 +136,7 @@ pub struct CountedObject<T> {
 }
 
 impl<T> CountedObject<T> {
+    #[inline(always)]
     pub fn new(val: T) -> Self {
         Self {
             storage: ManuallyDrop::new(val),
@@ -138,28 +146,34 @@ impl<T> CountedObject<T> {
         }
     }
 
+    #[inline(always)]
     pub fn data(&self) -> &T {
         &self.storage
     }
 
+    #[inline(always)]
     pub fn data_mut(&mut self) -> &mut T {
         &mut self.storage
     }
 
     /// Destroy the managed object, but keep the control data intact
+    #[inline(always)]
     pub unsafe fn dispose(&mut self) {
         self.disposed.store(true, Ordering::Release);
         ManuallyDrop::drop(&mut self.storage)
     }
 
+    #[inline(always)]
     pub fn use_count(&self) -> Count {
         self.ref_cnt.load(Ordering::SeqCst)
     }
 
+    #[inline(always)]
     pub fn weak_count(&self) -> Count {
         self.weak_cnt.load(Ordering::SeqCst)
     }
 
+    #[inline(always)]
     pub fn add_refs(&self, count: Count) -> bool {
         self.ref_cnt.increment(count, Ordering::SeqCst)
     }
@@ -168,6 +182,7 @@ impl<T> CountedObject<T> {
     /// the managed object will be destroyed, and the weak reference count will be decremented
     /// by one. If this causes the weak reference count to hit zero, returns true, indicating
     /// that the caller should delete this object.
+    #[inline(always)]
     pub fn release_refs(&mut self, count: Count) -> EjectAction {
         // A decrement-release + an acquire fence is recommended by Boost's documentation:
         // https://www.boost.org/doc/libs/1_57_0/doc/html/atomic/usage_examples.html
@@ -195,12 +210,14 @@ impl<T> CountedObject<T> {
         }
     }
 
+    #[inline(always)]
     pub fn add_weak_refs(&self, count: Count) -> bool {
         self.weak_cnt.increment(count, Ordering::Relaxed)
     }
 
     // Release weak references to the object. If this causes the weak reference count
     // to hit zero, returns true, indicating that the caller should delete this object.
+    #[inline(always)]
     pub fn release_weak_refs(&self, count: Count) -> bool {
         self.weak_cnt.decrement(count, Ordering::Release)
     }
@@ -217,6 +234,7 @@ pub struct MarkedPtr<T> {
 }
 
 impl<T> Default for MarkedPtr<T> {
+    #[inline(always)]
     fn default() -> Self {
         Self {
             ptr: ptr::null_mut(),
@@ -225,6 +243,7 @@ impl<T> Default for MarkedPtr<T> {
 }
 
 impl<T> Clone for MarkedPtr<T> {
+    #[inline(always)]
     fn clone(&self) -> Self {
         Self { ptr: self.ptr }
     }
@@ -233,56 +252,68 @@ impl<T> Clone for MarkedPtr<T> {
 impl<T> Copy for MarkedPtr<T> {}
 
 impl<T> PartialEq for MarkedPtr<T> {
+    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr
     }
 }
 
 impl<T> MarkedPtr<T> {
+    #[inline(always)]
     pub fn new(ptr: *mut T) -> Self {
         Self { ptr }
     }
 
+    #[inline(always)]
     pub fn null() -> Self {
         Self {
             ptr: ptr::null_mut(),
         }
     }
 
+    #[inline(always)]
     pub fn is_null(&self) -> bool {
         self.unmarked().is_null()
     }
 
+    #[inline(always)]
     pub fn mark(&self) -> usize {
         let ptr = self.ptr as usize;
         ptr & low_bits::<T>()
     }
 
+    #[inline(always)]
     pub fn unmarked(&self) -> *mut T {
         let ptr = self.ptr as usize;
         (ptr & !low_bits::<T>()) as *mut T
     }
 
+    #[inline(always)]
     pub fn with_mark(&self, mark: usize) -> Self {
         Self::new(with_mark(self.ptr, mark))
     }
 
+    #[inline(always)]
     pub fn set_ptr(&mut self, ptr: *mut T) {
         self.ptr = with_mark(ptr, self.mark());
     }
 
+    #[inline(always)]
     pub fn set_mark(&mut self, mark: usize) {
         self.ptr = with_mark(self.ptr, mark);
     }
 
+    #[inline(always)]
     pub unsafe fn deref<'g>(&self) -> &'g T {
         &*self.unmarked()
     }
 
+    #[inline(always)]
     pub unsafe fn deref_mut<'g>(&mut self) -> &'g mut T {
         &mut *self.unmarked()
     }
 
+    #[inline(always)]
     pub fn as_usize(&self) -> usize {
         self.ptr as usize
     }

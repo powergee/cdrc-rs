@@ -29,6 +29,7 @@ impl<T, Guard> AtomicRcPtr<T, Guard>
 where
     Guard: AcquireRetire,
 {
+    #[inline(always)]
     pub fn new(obj: T, guard: &Guard) -> Self {
         let ptr = RcPtr::make_shared(obj, guard);
         Self {
@@ -37,6 +38,7 @@ where
         }
     }
 
+    #[inline(always)]
     pub fn null() -> Self {
         Self {
             link: Atomic::new(MarkedPtr::null()),
@@ -44,6 +46,7 @@ where
         }
     }
 
+    #[inline(always)]
     pub fn store_null(&self, guard: &Guard) {
         let old = self.link.swap(MarkedPtr::null(), Ordering::SeqCst);
         if !old.is_null() {
@@ -51,6 +54,7 @@ where
         }
     }
 
+    #[inline(always)]
     pub fn store(&self, desired: RcPtr<T, Guard>, order: Ordering, guard: &Guard) {
         let new_ptr = desired.release();
         let old_ptr = self.link.swap(new_ptr, order);
@@ -60,6 +64,7 @@ where
     }
 
     /// A variation of `store_rc` which use relaxed load/store instead of swap
+    #[inline(always)]
     pub fn store_relaxed(&self, desired: RcPtr<T, Guard>, guard: &Guard) {
         let new_ptr = desired.release();
         let old_ptr = self.link.load(Ordering::Relaxed);
@@ -69,6 +74,7 @@ where
         }
     }
 
+    #[inline(always)]
     pub fn store_snapshot(&self, desired: SnapshotPtr<T, Guard>, order: Ordering, guard: &Guard) {
         // For converting a SnapshotPtr into an RcPtr,
         // as the ref count has already been incremented,
@@ -103,11 +109,13 @@ where
         }
     }
 
+    #[inline(always)]
     pub fn load<'g>(&self, guard: &'g Guard) -> RcPtr<'g, T, Guard> {
         let acquired = guard.acquire(&self.link);
         RcPtr::new_with_incr(acquired.as_counted_ptr(), guard)
     }
 
+    #[inline(always)]
     pub fn load_snapshot<'g>(&self, guard: &'g Guard) -> SnapshotPtr<'g, T, Guard> {
         SnapshotPtr::new(guard.protect_snapshot(&self.link), guard)
     }
@@ -115,6 +123,7 @@ where
     /// Swap the currently stored shared pointer with the given shared pointer.
     /// This operation is thread-safe.
     /// (It is equivalent to `exchange` from the original implementation.)
+    #[inline(always)]
     pub fn swap<'g>(&self, desired: RcPtr<T, Guard>, guard: &'g Guard) -> RcPtr<'g, T, Guard> {
         let new_ptr = desired.release();
         RcPtr::new_without_incr(self.link.swap(new_ptr, Ordering::SeqCst), guard)
@@ -123,6 +132,7 @@ where
     /// Atomically compares the underlying pointer with expected, and if they refer to
     /// the same managed object, replaces the current pointer with a copy of desired
     /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    #[inline(always)]
     pub fn compare_exchange_rc_rc<'g>(
         &self,
         expected: &RcPtr<'g, T, Guard>,
@@ -153,6 +163,7 @@ where
     /// Atomically compares the underlying pointer with expected, and if they refer to
     /// the same managed object, replaces the current pointer with a copy of desired
     /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    #[inline(always)]
     pub fn compare_exchange_ss_rc<'g>(
         &self,
         expected: &SnapshotPtr<'g, T, Guard>,
@@ -183,6 +194,7 @@ where
     /// Atomically compares the underlying pointer with expected, and if they refer to
     /// the same managed object, replaces the current pointer with a copy of desired
     /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    #[inline(always)]
     pub fn compare_exchange_rc_ss<'g>(
         &self,
         expected: &RcPtr<'g, T, Guard>,
@@ -213,6 +225,7 @@ where
     /// Atomically compares the underlying pointer with expected, and if they refer to
     /// the same managed object, replaces the current pointer with a copy of desired
     /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    #[inline(always)]
     pub fn compare_exchange_ss_ss<'g>(
         &self,
         expected: &SnapshotPtr<'g, T, Guard>,
@@ -240,6 +253,7 @@ where
         }
     }
 
+    #[inline(always)]
     fn compare_exchange_impl<'g>(
         &self,
         expected: MarkedCntObjPtr<T>,
@@ -260,6 +274,7 @@ where
         }
     }
 
+    #[inline(always)]
     pub fn fetch_or<'g>(&self, mark: usize, guard: &'g Guard) -> SnapshotPtr<'g, T, Guard> {
         let mut cur = self.link.load(Ordering::SeqCst);
         let mut new = cur.with_mark(cur.mark() | mark);
@@ -278,6 +293,7 @@ impl<T, Guard> Drop for AtomicRcPtr<T, Guard>
 where
     Guard: AcquireRetire,
 {
+    #[inline(always)]
     fn drop(&mut self) {
         let ptr = self.link.load(Ordering::SeqCst);
         unsafe {
@@ -293,6 +309,7 @@ impl<T, Guard> Default for AtomicRcPtr<T, Guard>
 where
     Guard: AcquireRetire,
 {
+    #[inline(always)]
     fn default() -> Self {
         Self::null()
     }

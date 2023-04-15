@@ -63,6 +63,7 @@ pub trait AcquireRetire {
 
     /* Public interfaces for CDRC operations */
 
+    #[inline]
     unsafe fn dispose<T>(&self, ptr: *mut CountedObject<T>) {
         assert!((*ptr).use_count() == 0);
         (*ptr).dispose();
@@ -71,6 +72,7 @@ pub trait AcquireRetire {
         }
     }
 
+    #[inline]
     unsafe fn destroy<T>(&self, ptr: *mut CountedObject<T>) {
         assert!((*ptr).use_count() == 0);
         self.delete_object(ptr);
@@ -78,6 +80,7 @@ pub trait AcquireRetire {
 
     /// Perform an eject action. This can correspond to any action that
     /// should be delayed until the ptr is no longer protected
+    #[inline]
     unsafe fn eject<T>(&self, ptr: *mut CountedObject<T>, ret_type: RetireType) {
         assert!(!ptr.is_null());
 
@@ -88,16 +91,19 @@ pub trait AcquireRetire {
         }
     }
 
+    #[inline]
     unsafe fn increment_ref_cnt<T>(&self, ptr: *mut CountedObject<T>) -> bool {
         assert!(!ptr.is_null());
         (*ptr).add_refs(1)
     }
 
+    #[inline]
     unsafe fn increment_weak_cnt<T>(&self, ptr: *mut CountedObject<T>) -> bool {
         assert!(!ptr.is_null());
         (*ptr).add_weak_refs(1)
     }
 
+    #[inline]
     unsafe fn decrement_ref_cnt<T>(&self, ptr: *mut CountedObject<T>) {
         assert!(!ptr.is_null());
         assert!((*ptr).use_count() >= 1);
@@ -110,6 +116,7 @@ pub trait AcquireRetire {
         }
     }
 
+    #[inline]
     unsafe fn decrement_weak_cnt<T>(&self, ptr: *mut CountedObject<T>) {
         assert!(!ptr.is_null());
         assert!((*ptr).weak_count() >= 1);
@@ -118,11 +125,13 @@ pub trait AcquireRetire {
         }
     }
 
+    #[inline]
     unsafe fn delayed_decrement_ref_cnt<T>(&self, ptr: *mut CountedObject<T>) {
         assert!((*ptr).use_count() >= 1);
         self.retire(ptr, RetireType::DecrementStrongCount);
     }
 
+    #[inline]
     unsafe fn delayed_decrement_weak_cnt<T>(&self, ptr: *mut CountedObject<T>) {
         assert!((*ptr).weak_count() >= 1);
         self.retire(ptr, RetireType::DecrementWeakCount);
