@@ -4,7 +4,7 @@ use static_assertions::const_assert;
 use std::{
     mem::ManuallyDrop,
     ptr,
-    sync::atomic::{compiler_fence, AtomicBool},
+    sync::atomic::compiler_fence,
 };
 
 pub(crate) type Count = u32;
@@ -132,7 +132,6 @@ pub struct CountedObject<T> {
     storage: ManuallyDrop<T>,
     ref_cnt: StickyCounter,
     weak_cnt: StickyCounter,
-    disposed: AtomicBool,
 }
 
 impl<T> CountedObject<T> {
@@ -142,7 +141,6 @@ impl<T> CountedObject<T> {
             storage: ManuallyDrop::new(val),
             ref_cnt: StickyCounter::new(),
             weak_cnt: StickyCounter::new(),
-            disposed: AtomicBool::new(false),
         }
     }
 
@@ -159,7 +157,6 @@ impl<T> CountedObject<T> {
     /// Destroy the managed object, but keep the control data intact
     #[inline(always)]
     pub unsafe fn dispose(&mut self) {
-        self.disposed.store(true, Ordering::Release);
         ManuallyDrop::drop(&mut self.storage)
     }
 
@@ -220,12 +217,6 @@ impl<T> CountedObject<T> {
     #[inline(always)]
     pub fn release_weak_refs(&self, count: Count) -> bool {
         self.weak_cnt.decrement(count, Ordering::Release)
-    }
-}
-
-impl<T> Drop for CountedObject<T> {
-    fn drop(&mut self) {
-        assert!(self.disposed.load(Ordering::Acquire));
     }
 }
 
