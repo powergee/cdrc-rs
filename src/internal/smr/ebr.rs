@@ -6,13 +6,13 @@ use crate::internal::utils::CountedObject;
 use crate::internal::{AcquireRetire, AcquiredPtr, MarkedCntObjPtr, RetireType};
 
 pub struct GuardEBR {
-    guard: crossbeam_epoch::Guard,
+    guard: Option<crossbeam_epoch::Guard>,
 }
 
 impl From<crossbeam_epoch::Guard> for GuardEBR {
     #[inline(always)]
     fn from(guard: crossbeam_epoch::Guard) -> Self {
-        Self { guard }
+        Self { guard: Some(guard) }
     }
 }
 
@@ -129,9 +129,17 @@ impl AcquireRetire for GuardEBR {
 
     #[inline(always)]
     unsafe fn retire<T>(&self, ptr: *mut CountedObject<T>, ret_type: RetireType) {
-        self.guard.defer_unchecked(move || {
-            let inner_guard = Self::handle();
-            inner_guard.eject(ptr, ret_type);
-        });
+        if let Some(guard) = &self.guard {
+            guard.defer_unchecked(move || {
+                let inner_guard = Self::unprotected();
+                inner_guard.eject(ptr, ret_type);
+            });
+        } else {
+            self.eject(ptr, ret_type);
+        }
+    }
+
+    unsafe fn unprotected() -> Self {
+        Self { guard: None }
     }
 }

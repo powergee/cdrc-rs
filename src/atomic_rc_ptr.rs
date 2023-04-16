@@ -7,6 +7,7 @@ use crate::{
     internal::{AcquireRetire, AcquiredPtr, MarkedCntObjPtr, MarkedPtr},
     rc_ptr::RcPtr,
     snapshot_ptr::SnapshotPtr,
+    LocalPtr,
 };
 
 pub struct AtomicRcPtr<T, Guard>
@@ -31,9 +32,35 @@ where
 {
     #[inline(always)]
     pub fn new(obj: T, guard: &Guard) -> Self {
-        let ptr = RcPtr::make_shared(obj, guard);
+        Self::from_rc(RcPtr::make_shared(obj, guard))
+    }
+
+    #[inline(always)]
+    pub fn from_rc(ptr: RcPtr<T, Guard>) -> Self {
         Self {
             link: Atomic::new(ptr.release()),
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn from_snapshot<'g>(ptr: SnapshotPtr<'g, T, Guard>, guard: &'g Guard) -> Self {
+        let result = Self::null();
+        result.store_snapshot(ptr, Ordering::Relaxed, guard);
+        result
+    }
+
+    #[inline(always)]
+    pub fn from_local<'g, P>(ptr: &P, guard: &'g Guard) -> Self
+    where
+        P: LocalPtr<'g, T, Guard>,
+    {
+        let ptr = ptr.as_counted_ptr();
+        if !ptr.is_null() {
+            unsafe { guard.increment_ref_cnt(ptr.unmarked()) };
+        }
+        Self {
+            link: Atomic::new(ptr),
             _marker: PhantomData,
         }
     }
@@ -133,12 +160,16 @@ where
     /// the same managed object, replaces the current pointer with a copy of desired
     /// (incrementing its reference count) and returns true. Otherwise, returns false.
     #[inline(always)]
-    pub fn compare_exchange_rc_rc<'g>(
+    pub fn compare_exchange<'g, P1, P2>(
         &self,
-        expected: &RcPtr<'g, T, Guard>,
-        desired: &RcPtr<'g, T, Guard>,
+        expected: &P1,
+        desired: &P2,
         guard: &'g Guard,
-    ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
+    ) -> Result<(), SnapshotPtr<'g, T, Guard>>
+    where
+        P1: LocalPtr<'g, T, Guard>,
+        P2: LocalPtr<'g, T, Guard>,
+    {
         // We need to make a reservation if the desired snapshot pointer no longer has
         // an announcement slot. Otherwise, desired is protected, assuming that another
         // thread can not clear the announcement slot (this might change one day!)
@@ -163,6 +194,23 @@ where
     /// Atomically compares the underlying pointer with expected, and if they refer to
     /// the same managed object, replaces the current pointer with a copy of desired
     /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    ///
+    /// NOTE: `compare_exchange_A_B` variants are remaining for backward compatibility.
+    #[inline(always)]
+    pub fn compare_exchange_rc_rc<'g>(
+        &self,
+        expected: &RcPtr<'g, T, Guard>,
+        desired: &RcPtr<'g, T, Guard>,
+        guard: &'g Guard,
+    ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
+        self.compare_exchange(expected, desired, guard)
+    }
+
+    /// Atomically compares the underlying pointer with expected, and if they refer to
+    /// the same managed object, replaces the current pointer with a copy of desired
+    /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    ///
+    /// NOTE: `compare_exchange_A_B` variants are remaining for backward compatibility.
     #[inline(always)]
     pub fn compare_exchange_ss_rc<'g>(
         &self,
@@ -170,30 +218,14 @@ where
         desired: &RcPtr<'g, T, Guard>,
         guard: &'g Guard,
     ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
-        // We need to make a reservation if the desired snapshot pointer no longer has
-        // an announcement slot. Otherwise, desired is protected, assuming that another
-        // thread can not clear the announcement slot (this might change one day!)
-        let _reservation = if desired.is_protected() {
-            guard.reserve_nothing()
-        } else {
-            guard.reserve(desired.as_counted_ptr().unmarked())
-        };
-
-        let desired_ptr = desired.as_counted_ptr();
-        match self.compare_exchange_impl(expected.as_counted_ptr(), desired_ptr, guard) {
-            Ok(()) => {
-                if !desired_ptr.is_null() {
-                    unsafe { guard.increment_ref_cnt(desired_ptr.unmarked()) };
-                }
-                Ok(())
-            }
-            Err(current) => Err(current),
-        }
+        self.compare_exchange(expected, desired, guard)
     }
 
     /// Atomically compares the underlying pointer with expected, and if they refer to
     /// the same managed object, replaces the current pointer with a copy of desired
     /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    ///
+    /// NOTE: `compare_exchange_A_B` variants are remaining for backward compatibility.
     #[inline(always)]
     pub fn compare_exchange_rc_ss<'g>(
         &self,
@@ -201,30 +233,14 @@ where
         desired: &SnapshotPtr<'g, T, Guard>,
         guard: &'g Guard,
     ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
-        // We need to make a reservation if the desired snapshot pointer no longer has
-        // an announcement slot. Otherwise, desired is protected, assuming that another
-        // thread can not clear the announcement slot (this might change one day!)
-        let _reservation = if desired.is_protected() {
-            guard.reserve_nothing()
-        } else {
-            guard.reserve(desired.as_counted_ptr().unmarked())
-        };
-
-        let desired_ptr = desired.as_counted_ptr();
-        match self.compare_exchange_impl(expected.as_counted_ptr(), desired_ptr, guard) {
-            Ok(()) => {
-                if !desired_ptr.is_null() {
-                    unsafe { guard.increment_ref_cnt(desired_ptr.unmarked()) };
-                }
-                Ok(())
-            }
-            Err(current) => Err(current),
-        }
+        self.compare_exchange(expected, desired, guard)
     }
 
     /// Atomically compares the underlying pointer with expected, and if they refer to
     /// the same managed object, replaces the current pointer with a copy of desired
     /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    ///
+    /// NOTE: `compare_exchange_A_B` variants are remaining for backward compatibility.
     #[inline(always)]
     pub fn compare_exchange_ss_ss<'g>(
         &self,
@@ -232,25 +248,7 @@ where
         desired: &SnapshotPtr<'g, T, Guard>,
         guard: &'g Guard,
     ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
-        // We need to make a reservation if the desired snapshot pointer no longer has
-        // an announcement slot. Otherwise, desired is protected, assuming that another
-        // thread can not clear the announcement slot (this might change one day!)
-        let _reservation = if desired.is_protected() {
-            guard.reserve_nothing()
-        } else {
-            guard.reserve(desired.as_counted_ptr().unmarked())
-        };
-
-        let desired_ptr = desired.as_counted_ptr();
-        match self.compare_exchange_impl(expected.as_counted_ptr(), desired_ptr, guard) {
-            Ok(()) => {
-                if !desired_ptr.is_null() {
-                    unsafe { guard.increment_ref_cnt(desired_ptr.unmarked()) };
-                }
-                Ok(())
-            }
-            Err(current) => Err(current),
-        }
+        self.compare_exchange(expected, desired, guard)
     }
 
     #[inline(always)]
@@ -275,12 +273,15 @@ where
     }
 
     #[inline(always)]
-    pub fn compare_exchange_mark<'g>(
+    pub fn compare_exchange_mark<'g, P>(
         &self,
-        expected: &SnapshotPtr<'g, T, Guard>,
+        expected: &P,
         mark: usize,
         guard: &'g Guard,
-    ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
+    ) -> Result<(), SnapshotPtr<'g, T, Guard>>
+    where
+        P: LocalPtr<'g, T, Guard>,
+    {
         let expected_ptr = expected.as_counted_ptr();
         let desired_ptr = expected_ptr.with_mark(mark);
         match self.link.compare_exchange(
@@ -318,7 +319,7 @@ where
         let ptr = self.link.load(Ordering::SeqCst);
         unsafe {
             if !ptr.is_null() {
-                let guard = Guard::handle();
+                let guard = Guard::unprotected();
                 guard.delayed_decrement_ref_cnt(ptr.unmarked());
             }
         }

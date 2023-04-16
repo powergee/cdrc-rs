@@ -1,6 +1,7 @@
 use crate::{
     internal::{AcquireRetire, Count, MarkedCntObjPtr, MarkedPtr},
     snapshot_ptr::SnapshotPtr,
+    LocalPtr,
 };
 
 pub struct RcPtr<'g, T: 'g, Guard: 'g>
@@ -121,7 +122,7 @@ where
     }
 
     #[inline(always)]
-    pub(crate) fn as_counted_ptr(&self) -> MarkedCntObjPtr<T> {
+    pub fn as_counted_ptr(&self) -> MarkedCntObjPtr<T> {
         self.ptr
     }
 
@@ -172,5 +173,70 @@ where
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr
+    }
+}
+
+impl<'g, T, Guard> LocalPtr<'g, T, Guard> for RcPtr<'g, T, Guard>
+where
+    Guard: AcquireRetire,
+{
+    #[inline(always)]
+    fn is_null(&self) -> bool {
+        self.is_null()
+    }
+
+    #[inline(always)]
+    unsafe fn as_ref(&self) -> Option<&'g T> {
+        self.as_ref()
+    }
+
+    #[inline(always)]
+    unsafe fn deref(&self) -> &'g T {
+        self.deref()
+    }
+
+    #[inline(always)]
+    unsafe fn deref_mut(&mut self) -> &'g mut T {
+        self.deref_mut()
+    }
+
+    #[inline(always)]
+    fn as_counted_ptr(&self) -> MarkedCntObjPtr<T> {
+        self.as_counted_ptr()
+    }
+
+    #[inline(always)]
+    fn is_protected(&self) -> bool {
+        self.is_protected()
+    }
+
+    #[inline(always)]
+    fn as_usize(&self) -> usize {
+        self.as_usize()
+    }
+
+    #[inline(always)]
+    fn mark(&self) -> usize {
+        self.mark()
+    }
+
+    #[inline(always)]
+    fn with_mark(self, mark: usize) -> Self {
+        self.with_mark(mark)
+    }
+
+    #[inline(always)]
+    fn unmarked(self) -> Self {
+        self.unmarked()
+    }
+
+    #[inline(always)]
+    fn clone(&self, guard: &'g Guard) -> Self {
+        self.clone(guard)
+    }
+
+    #[inline(always)]
+    fn as_rc(self) -> RcPtr<'g, T, Guard> {
+        self
     }
 }

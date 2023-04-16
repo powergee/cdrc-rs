@@ -1,12 +1,14 @@
 #![feature(associated_type_bounds)]
 mod atomic_rc_ptr;
 mod internal;
+mod local_ptr;
 mod rc_ptr;
 mod snapshot_ptr;
 
 pub use internal::{AcquireRetire, AcquiredPtr, CountedObject, EjectAction, GuardEBR, RetireType};
 
 pub use atomic_rc_ptr::AtomicRcPtr;
+pub use local_ptr::LocalPtr;
 pub use rc_ptr::RcPtr;
 pub use snapshot_ptr::SnapshotPtr;
 

@@ -45,6 +45,7 @@ pub trait AcquireRetire {
     /* SMR-specific protecting & releasing */
 
     fn handle() -> Self;
+    unsafe fn unprotected() -> Self;
     fn create_object<T>(&self, obj: T) -> *mut CountedObject<T>;
     fn acquire<T>(&self, link: &Atomic<MarkedCntObjPtr<T>>) -> Self::AcquiredPtr<T>;
     /// Like `acquire`, but assuming that the caller already has a
