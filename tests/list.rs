@@ -42,26 +42,6 @@ where
     }
 }
 
-impl<K, V, Guard> Drop for List<K, V, Guard>
-where
-    Guard: AcquireRetire,
-{
-    fn drop(&mut self) {
-        let guard = unsafe { Guard::unprotected() };
-        unsafe {
-            let mut curr = self.head.load(guard);
-            let mut next;
-
-            while !curr.is_null() {
-                let curr_ref = curr.deref_mut();
-                next = curr_ref.next.load(guard);
-                curr_ref.next.store_null(guard);
-                curr = next;
-            }
-        }
-    }
-}
-
 impl<K, V, Guard> Node<K, V, Guard>
 where
     Guard: AcquireRetire,
@@ -153,7 +133,7 @@ where
         // cleanup marked nodes between prev and curr
         unsafe { self.prev.deref() }
             .next
-            .compare_exchange_snapshot(&prev_next, &RcPtr::from_snapshot(&self.curr, guard), guard)
+            .compare_exchange(&prev_next, &self.curr, guard)
             .map_err(|_| ())?;
 
         Ok(found)
@@ -180,7 +160,7 @@ where
 
         if unsafe { self.prev.deref() }
             .next
-            .compare_exchange_snapshot(&self.curr, &node, guard)
+            .compare_exchange(&self.curr, &node, guard)
             .is_ok()
         {
             Ok(())
@@ -201,7 +181,7 @@ where
 
         let _ = unsafe { self.prev.deref() }
             .next
-            .compare_exchange_snapshot(&self.curr, &next, guard);
+            .compare_exchange(&self.curr, &next, guard);
 
         Ok(&curr_node.value)
     }
@@ -216,7 +196,7 @@ where
     /// Creates a new list.
     pub fn new() -> Self {
         List {
-            head: AtomicRcPtr::new(Node::head(), unsafe { Guard::unprotected() }),
+            head: AtomicRcPtr::new(Node::head(), &Guard::handle()),
         }
     }
 
@@ -349,52 +329,46 @@ pub mod tests {
     extern crate rand;
     use super::ConcurrentMap;
     use super::HList;
-    use cdrc_rs::Handle;
-    use cdrc_rs::HandleEBR;
+    use cdrc_rs::AcquireRetire;
+    use cdrc_rs::GuardEBR;
     use crossbeam_utils::thread;
     use rand::prelude::*;
 
     const THREADS: i32 = 30;
     const ELEMENTS_PER_THREADS: i32 = 1000;
 
-    pub fn smoke<H: Handle, M: ConcurrentMap<i32, String, H::Guard> + Send + Sync>() {
+    pub fn smoke<Guard: AcquireRetire, M: ConcurrentMap<i32, String, Guard> + Send + Sync>() {
         let map = &M::new();
-
-        unsafe { H::set_max_threads(THREADS as usize) };
 
         thread::scope(|s| {
             for t in 0..THREADS {
                 s.spawn(move |_| {
-                    let handle = H::register();
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> =
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     for i in keys {
-                        assert!(map.insert(i, i.to_string(), &handle.pin()));
+                        assert!(map.insert(i, i.to_string(), &Guard::handle()));
                     }
                 });
             }
         })
         .unwrap();
 
-        unsafe { H::reset_registrations() };
-
         thread::scope(|s| {
             for t in 0..THREADS {
                 s.spawn(move |_| {
-                    let handle = H::register();
                     let mut rng = rand::thread_rng();
                     let mut keys: Vec<i32> =
                         (0..ELEMENTS_PER_THREADS).map(|k| k * THREADS + t).collect();
                     keys.shuffle(&mut rng);
                     if t < THREADS / 2 {
                         for i in keys {
-                            assert_eq!(i.to_string(), *map.remove(&i, &handle.pin()).unwrap());
+                            assert_eq!(i.to_string(), *map.remove(&i, &Guard::handle()).unwrap());
                         }
                     } else {
                         for i in keys {
-                            assert_eq!(i.to_string(), *map.get(&i, &handle.pin()).unwrap());
+                            assert_eq!(i.to_string(), *map.get(&i, &Guard::handle()).unwrap());
                         }
                     }
                 });
@@ -405,6 +379,6 @@ pub mod tests {
 
     #[test]
     fn smoke_ebr_h_list() {
-        smoke::<HandleEBR, HList<i32, String, <HandleEBR as Handle>::Guard>>();
+        smoke::<GuardEBR, HList<i32, String, GuardEBR>>();
     }
 }
