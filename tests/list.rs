@@ -331,6 +331,7 @@ pub mod tests {
     use super::HList;
     use cdrc_rs::AcquireRetire;
     use cdrc_rs::GuardEBR;
+    use cdrc_rs::GuardHP;
     use crossbeam_utils::thread;
     use rand::prelude::*;
 
@@ -380,5 +381,10 @@ pub mod tests {
     #[test]
     fn smoke_ebr_h_list() {
         smoke::<GuardEBR, HList<i32, String, GuardEBR>>();
+    }
+
+    #[test]
+    fn smoke_hp_h_list() {
+        smoke::<GuardHP, HList<i32, String, GuardHP>>();
     }
 }

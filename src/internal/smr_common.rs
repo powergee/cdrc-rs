@@ -4,6 +4,7 @@ use crate::internal::utils::CountedObject;
 use crate::internal::utils::EjectAction;
 use crate::internal::utils::MarkedCntObjPtr;
 
+#[derive(Debug, Clone, Copy)]
 pub enum RetireType {
     DecrementStrongCount,
     DecrementWeakCount,
