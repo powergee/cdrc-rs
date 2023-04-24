@@ -258,17 +258,24 @@ where
         desired: MarkedCntObjPtr<T>,
         guard: &'g Guard,
     ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
-        match self
-            .link
-            .compare_exchange(expected, desired, Ordering::SeqCst, Ordering::SeqCst)
-        {
-            Ok(_) => {
-                if !expected.is_null() {
-                    unsafe { guard.delayed_decrement_ref_cnt(expected.unmarked()) };
+        loop {
+            match self
+                .link
+                .compare_exchange(expected, desired, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => {
+                    if !expected.is_null() {
+                        unsafe { guard.delayed_decrement_ref_cnt(expected.unmarked()) };
+                    }
+                    return Ok(());
                 }
-                Ok(())
+                Err(_) => {
+                    let loaded = self.load_snapshot(guard);
+                    if loaded.as_usize() != expected.as_usize() {
+                        return Err(loaded);
+                    }
+                }
             }
-            Err(current) => Err(SnapshotPtr::new(guard.reserve_snapshot(current), guard)),
         }
     }
 

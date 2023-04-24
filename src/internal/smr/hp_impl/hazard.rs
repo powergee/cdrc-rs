@@ -13,13 +13,13 @@ pub struct HazardPointer<'domain> {
 
 impl Default for HazardPointer<'static> {
     fn default() -> Self {
-        DEFAULT_THREAD.with(|t| HazardPointer::new(&mut t.borrow_mut()))
+        DEFAULT_THREAD.with(|t| HazardPointer::new(&mut t.borrow()))
     }
 }
 
 impl<'domain> HazardPointer<'domain> {
     /// Create a hazard pointer in the given thread
-    pub fn new(thread: &mut Thread<'domain>) -> Self {
+    pub fn new(thread: &Thread<'domain>) -> Self {
         let idx = thread.acquire();
         Self { thread, idx }
     }
@@ -33,12 +33,12 @@ impl<'domain> HazardPointer<'domain> {
     }
 
     /// Protect the given address.
-    pub fn protect_raw<T>(&mut self, ptr: *mut T) {
+    pub fn protect_raw<T>(&self, ptr: *mut T) {
         self.slot().store(ptr as *mut u8, Ordering::Release);
     }
 
     /// Release the protection awarded by this hazard pointer, if any.
-    pub fn reset_protection(&mut self) {
+    pub fn reset_protection(&self) {
         self.slot().store(ptr::null_mut(), Ordering::Release);
     }
 
@@ -60,7 +60,7 @@ impl<'domain> HazardPointer<'domain> {
     ///
     /// If "`src` still pointing to `pointer`" implies that `pointer` is not retired, then `Ok(())`
     /// means that this shield is validated.
-    pub fn try_protect<T>(&mut self, pointer: *mut T, src: &AtomicPtr<T>) -> Result<(), *mut T> {
+    pub fn try_protect<T>(&self, pointer: *mut T, src: &AtomicPtr<T>) -> Result<(), *mut T> {
         self.protect_raw(pointer);
         Self::validate(pointer, src)
     }
@@ -68,7 +68,7 @@ impl<'domain> HazardPointer<'domain> {
     /// Get a protected pointer from `src`.
     ///
     /// See `try_protect()`.
-    pub fn protect<T>(&mut self, src: &AtomicPtr<T>) -> *mut T {
+    pub fn protect<T>(&self, src: &AtomicPtr<T>) -> *mut T {
         let mut pointer = src.load(Ordering::Relaxed);
         while let Err(new) = self.try_protect(pointer, src) {
             pointer = new;
@@ -186,11 +186,8 @@ impl<'domain> Iterator for ThreadRecordsIter<'domain> {
 }
 
 impl ThreadRecord {
-    pub(crate) fn iter<'domain>(
-        &self,
-        reader: &mut Thread<'domain>,
-    ) -> ThreadHazardArrayIter<'domain> {
-        let mut hp = HazardPointer::new(reader);
+    pub(crate) fn iter<'domain>(&self, reader: &Thread<'domain>) -> ThreadHazardArrayIter<'domain> {
+        let hp = HazardPointer::new(reader);
         let array = hp.protect(&self.hazptrs);
         ThreadHazardArrayIter {
             array: unsafe { &*array }.as_slice(),

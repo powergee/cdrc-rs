@@ -23,5 +23,5 @@ pub unsafe fn defer<T, F>(ptr: *mut T, f: F)
 where
     F: FnOnce(),
 {
-    DEFAULT_THREAD.with(|t| t.borrow_mut().defer(ptr, f))
+    DEFAULT_THREAD.with(|t| t.borrow().defer(ptr, f))
 }

@@ -1,5 +1,6 @@
+use core::ptr;
 use core::sync::atomic::{AtomicPtr, Ordering};
-use core::{mem, ptr};
+use std::cell::{Cell, RefCell};
 
 use super::domain::Domain;
 use super::hazard::ThreadRecord;
@@ -9,9 +10,9 @@ pub struct Thread<'domain> {
     pub(crate) domain: &'domain Domain,
     pub(crate) hazards: &'domain ThreadRecord,
     /// available slots of hazard array
-    pub(crate) available_indices: Vec<usize>,
-    pub(crate) retired: Vec<Retired>,
-    pub(crate) count: usize,
+    pub(crate) available_indices: RefCell<Vec<usize>>,
+    pub(crate) retired: RefCell<Vec<Retired>>,
+    pub(crate) count: Cell<usize>,
 }
 
 impl<'domain> Thread<'domain> {
@@ -20,9 +21,9 @@ impl<'domain> Thread<'domain> {
         Self {
             domain,
             hazards: thread,
-            available_indices,
-            retired: Vec::new(),
-            count: 0,
+            available_indices: RefCell::new(available_indices),
+            retired: RefCell::new(Vec::new()),
+            count: Cell::new(0),
         }
     }
 }
@@ -32,27 +33,29 @@ impl<'domain> Thread<'domain> {
     const COUNTS_BETWEEN_FLUSH: usize = 64;
     const COUNTS_BETWEEN_COLLECT: usize = 128;
 
-    fn flush_retireds(&mut self) {
+    fn flush_retireds(&self) {
         self.domain
             .num_garbages
-            .fetch_add(self.retired.len(), Ordering::AcqRel);
-        self.domain.retireds.push(mem::take(&mut self.retired))
+            .fetch_add(self.retired.borrow().len(), Ordering::AcqRel);
+        self.domain.retireds.push(self.retired.take())
     }
 
     // NOTE: T: Send not required because we reclaim only locally.
     #[inline]
-    pub unsafe fn retire<T>(&mut self, ptr: *mut T) {
+    pub unsafe fn retire<T>(&self, ptr: *mut T) {
         self.defer(ptr as *mut _, move || unsafe { drop(Box::from_raw(ptr)) });
     }
 
     #[inline]
-    pub unsafe fn defer<T, F>(&mut self, ptr: *mut T, f: F)
+    pub unsafe fn defer<T, F>(&self, ptr: *mut T, f: F)
     where
         F: FnOnce(),
     {
-        self.retired.push(Retired::new(ptr as *mut _, f));
-        let count = self.count.wrapping_add(1);
-        self.count = count;
+        self.retired
+            .borrow_mut()
+            .push(Retired::new(ptr as *mut _, f));
+        let count = self.count.get().wrapping_add(1);
+        self.count.set(count);
         if count % Self::COUNTS_BETWEEN_FLUSH == 0 {
             self.flush_retireds();
         }
@@ -63,7 +66,7 @@ impl<'domain> Thread<'domain> {
     }
 
     #[inline]
-    pub(crate) fn do_reclamation(&mut self) {
+    pub(crate) fn do_reclamation(&self) {
         let retireds = self.domain.retireds.pop_all();
         let retireds_len = retireds.len();
         if retireds.is_empty() {
@@ -94,8 +97,9 @@ impl<'domain> Thread<'domain> {
 // stuff related to hazards
 impl<'domain> Thread<'domain> {
     /// acquire hazard slot
-    pub(crate) fn acquire(&mut self) -> usize {
-        if let Some(idx) = self.available_indices.pop() {
+    pub(crate) fn acquire(&self) -> usize {
+        let idx = self.available_indices.borrow_mut().pop();
+        if let Some(idx) = idx {
             idx
         } else {
             self.grow_array();
@@ -103,7 +107,7 @@ impl<'domain> Thread<'domain> {
         }
     }
 
-    fn grow_array(&mut self) {
+    fn grow_array(&self) {
         let array_ptr = self.hazards.hazptrs.load(Ordering::Relaxed);
         let array = unsafe { &*array_ptr };
         let size = array.len();
@@ -119,12 +123,12 @@ impl<'domain> Thread<'domain> {
             .hazptrs
             .store(Box::into_raw(new_array), Ordering::Release);
         unsafe { self.retire(array_ptr) };
-        self.available_indices.extend(size..new_size)
+        self.available_indices.borrow_mut().extend(size..new_size)
     }
 
     /// release hazard slot
     pub(crate) fn release(&mut self, idx: usize) {
-        self.available_indices.push(idx);
+        self.available_indices.borrow_mut().push(idx);
     }
 }
 
@@ -132,22 +136,10 @@ impl<'domain> Drop for Thread<'domain> {
     fn drop(&mut self) {
         self.flush_retireds();
         membarrier::heavy();
-        assert!(self.retired.is_empty());
+        assert!(self.retired.borrow().is_empty());
         // WARNING: Dropping HazardPointer touches available_indices. So available_indices MUST be
         // dropped after hps. For the same reason, Thread::drop MUST NOT acquire HazardPointer.
-        self.available_indices.clear();
+        self.available_indices.borrow_mut().clear();
         self.domain.threads.release(self.hazards);
-    }
-}
-
-impl core::fmt::Debug for Thread<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Thread")
-            .field("domain", &(&self.domain as *const _))
-            .field("hazards", &(&self.hazards as *const _))
-            .field("available_indices", &self.available_indices.as_ptr())
-            .field("retired", &format!("[...; {}]", self.retired.len()))
-            .field("count", &self.count)
-            .finish()
     }
 }

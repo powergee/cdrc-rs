@@ -1,32 +1,54 @@
+use std::cell::Cell;
+
 use atomic::Ordering;
 
 use crate::{internal::MarkedCntObjPtr, AcquireRetire, AcquiredPtr, CountedObject};
 
 use super::hp_impl::{defer, HazardPointer};
 
-pub struct GuardHP {
-    is_protecting: bool,
+const SHIELD_COUNT: usize = 7;
+
+#[derive(Default)]
+pub struct GuardData {
+    shield: HazardPointer<'static>,
+    snapshot_shield: [HazardPointer<'static>; SHIELD_COUNT],
+    snapshot_in_use: [Cell<bool>; SHIELD_COUNT],
 }
 
-impl GuardHP {
-    #[inline(always)]
-    pub fn protected() -> Self {
-        Self {
-            is_protecting: true,
+impl GuardData {
+    fn new() -> Self {
+        let mut data = GuardData {
+            shield: Default::default(),
+            snapshot_shield: Default::default(),
+            snapshot_in_use: Default::default(),
+        };
+
+        data.shield.reset_protection();
+        for shield in &mut data.snapshot_shield {
+            shield.reset_protection();
         }
+        data
     }
 
-    #[inline(always)]
-    pub fn unprotected() -> Self {
-        Self {
-            is_protecting: false,
+    fn get_free_shield<'g>(&'g self) -> Option<(&'g HazardPointer<'static>, &'g Cell<bool>)> {
+        for i in 0..SHIELD_COUNT {
+            if !self.snapshot_in_use[i].get() {
+                self.snapshot_in_use[i].set(true);
+                return Some((&self.snapshot_shield[i], &self.snapshot_in_use[i]));
+            }
         }
+        None
     }
+}
+
+pub struct GuardHP {
+    shield: Option<GuardData>,
 }
 
 pub struct AcquiredPtrHP<T> {
-    hazptr: Option<HazardPointer<'static>>,
+    hazptr: *const HazardPointer<'static>,
     ptr: MarkedCntObjPtr<T>,
+    in_use: *const Cell<bool>,
 }
 
 impl<T> AcquiredPtr<T> for AcquiredPtrHP<T> {
@@ -48,8 +70,9 @@ impl<T> AcquiredPtr<T> for AcquiredPtrHP<T> {
     #[inline(always)]
     fn null() -> Self {
         Self {
-            hazptr: None,
+            hazptr: core::ptr::null_mut(),
             ptr: MarkedCntObjPtr::null(),
+            in_use: core::ptr::null_mut(),
         }
     }
 
@@ -60,13 +83,20 @@ impl<T> AcquiredPtr<T> for AcquiredPtrHP<T> {
 
     #[inline(always)]
     fn is_protected(&self) -> bool {
-        self.hazptr.is_some() && !self.ptr.is_null()
+        !self.hazptr.is_null()
     }
 
     #[inline(always)]
     fn clear_protection(&mut self) {
-        if let Some(hazptr) = self.hazptr.as_mut() {
+        if let Some(hazptr) = unsafe { self.hazptr.as_ref() } {
             hazptr.reset_protection();
+            self.hazptr = core::ptr::null();
+        }
+        unsafe {
+            if let Some(in_use) = self.in_use.as_ref() {
+                in_use.set(false);
+                self.in_use = core::ptr::null();
+            }
         }
     }
 
@@ -81,17 +111,25 @@ impl<T> AcquiredPtr<T> for AcquiredPtrHP<T> {
     }
 }
 
+impl<T> Drop for AcquiredPtrHP<T> {
+    fn drop(&mut self) {
+        self.clear_protection();
+    }
+}
+
 impl AcquireRetire for GuardHP {
     type AcquiredPtr<T> = AcquiredPtrHP<T>;
 
     #[inline(always)]
     fn handle() -> Self {
-        Self::protected()
+        GuardHP {
+            shield: Some(GuardData::new()),
+        }
     }
 
     #[inline(always)]
     unsafe fn unprotected() -> Self {
-        Self::unprotected()
+        GuardHP { shield: None }
     }
 
     #[inline(always)]
@@ -102,11 +140,12 @@ impl AcquireRetire for GuardHP {
 
     #[inline(always)]
     fn acquire<T>(&self, link: &atomic::Atomic<MarkedCntObjPtr<T>>) -> Self::AcquiredPtr<T> {
+        assert!(self.shield.is_some());
+        let data = self.shield.as_ref().unwrap();
         let mut ptr = link.load(Ordering::Relaxed);
-        let mut hazptr = HazardPointer::default();
 
         loop {
-            hazptr.protect_raw(ptr.unmarked());
+            data.shield.protect_raw(ptr.unmarked());
             membarrier::light();
             let new_ptr = link.load(Ordering::Acquire);
             if ptr == new_ptr {
@@ -115,20 +154,23 @@ impl AcquireRetire for GuardHP {
             ptr = new_ptr;
         }
         AcquiredPtrHP {
-            hazptr: Some(hazptr),
+            hazptr: &data.shield,
             ptr,
+            in_use: core::ptr::null_mut(),
         }
     }
 
     #[inline(always)]
     fn reserve<T>(&self, ptr: *mut crate::CountedObject<T>) -> Self::AcquiredPtr<T> {
+        assert!(self.shield.is_some());
+        let data = self.shield.as_ref().unwrap();
         let ptr = MarkedCntObjPtr::new(ptr);
-        let mut hazptr = HazardPointer::default();
-        hazptr.protect_raw(ptr.unmarked());
+        data.shield.protect_raw(ptr.unmarked());
         membarrier::light();
         AcquiredPtrHP {
-            hazptr: Some(hazptr),
+            hazptr: &data.shield,
             ptr,
+            in_use: core::ptr::null_mut(),
         }
     }
 
@@ -142,32 +184,65 @@ impl AcquireRetire for GuardHP {
         &self,
         link: &atomic::Atomic<MarkedCntObjPtr<T>>,
     ) -> Self::AcquiredPtr<T> {
+        assert!(self.shield.is_some());
+        let data = self.shield.as_ref().unwrap();
         let mut ptr = link.load(Ordering::Relaxed);
-        let mut hazptr = HazardPointer::default();
 
-        loop {
-            hazptr.protect_raw(ptr.unmarked());
-            membarrier::light();
-            let new_ptr = link.load(Ordering::Acquire);
-            if ptr == new_ptr {
-                break;
+        if let Some((hazptr, in_use)) = data.get_free_shield() {
+            loop {
+                hazptr.protect_raw(ptr.unmarked());
+                membarrier::light();
+                let new_ptr = link.load(Ordering::Acquire);
+                if ptr == new_ptr {
+                    break;
+                }
+                ptr = new_ptr;
             }
-            ptr = new_ptr;
-        }
-        AcquiredPtrHP {
-            hazptr: Some(hazptr),
-            ptr,
+            AcquiredPtrHP {
+                hazptr,
+                ptr,
+                in_use,
+            }
+        } else {
+            loop {
+                let acquired = self.acquire(link);
+                if !acquired.is_null() {
+                    assert!(unsafe {
+                        self.increment_ref_cnt(acquired.as_counted_ptr().unmarked())
+                    });
+                    return AcquiredPtrHP {
+                        hazptr: core::ptr::null(),
+                        ptr: acquired.ptr,
+                        in_use: core::ptr::null_mut(),
+                    };
+                } else if acquired.is_null()
+                    || link.load(Ordering::Acquire).as_usize()
+                        == acquired.as_counted_ptr().as_usize()
+                {
+                    return AcquiredPtrHP {
+                        hazptr: core::ptr::null(),
+                        ptr: MarkedCntObjPtr::null(),
+                        in_use: core::ptr::null_mut(),
+                    };
+                }
+            }
         }
     }
 
     #[inline(always)]
     fn reserve_snapshot<T>(&self, ptr: MarkedCntObjPtr<T>) -> Self::AcquiredPtr<T> {
-        let mut hazptr = HazardPointer::default();
-        hazptr.protect_raw(ptr.unmarked());
-        membarrier::light();
+        if ptr.is_null() {
+            return AcquiredPtrHP {
+                hazptr: core::ptr::null(),
+                ptr: MarkedCntObjPtr::null(),
+                in_use: core::ptr::null_mut(),
+            };
+        }
+        assert!(unsafe { self.increment_ref_cnt(ptr.unmarked()) });
         AcquiredPtrHP {
-            hazptr: Some(hazptr),
+            hazptr: core::ptr::null(),
             ptr,
+            in_use: core::ptr::null_mut(),
         }
     }
 
@@ -181,14 +256,10 @@ impl AcquireRetire for GuardHP {
 
     #[inline(always)]
     unsafe fn retire<T>(&self, ptr: *mut crate::CountedObject<T>, ret_type: crate::RetireType) {
-        if self.is_protecting {
-            let marked = MarkedCntObjPtr::new(ptr);
-            defer(marked.unmarked(), move || {
-                let inner_guard = Self::handle();
-                inner_guard.eject(ptr, ret_type);
-            });
-        } else {
-            self.eject(ptr, ret_type);
-        }
+        let marked = MarkedCntObjPtr::new(ptr);
+        defer(marked.unmarked(), move || {
+            let inner_guard = Self::unprotected();
+            inner_guard.eject(ptr, ret_type);
+        });
     }
 }
