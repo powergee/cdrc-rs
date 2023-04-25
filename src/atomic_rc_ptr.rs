@@ -297,16 +297,15 @@ where
 
     #[inline(always)]
     pub fn fetch_or<'g>(&self, mark: usize, guard: &'g Guard) -> SnapshotPtr<'g, T, Guard> {
-        let mut cur = self.link.load(Ordering::SeqCst);
-        let mut new = cur.with_mark(cur.mark() | mark);
-        while let Err(actual) =
-            self.link
-                .compare_exchange_weak(cur, new, Ordering::SeqCst, Ordering::SeqCst)
+        let mut cur = self.load_snapshot(guard);
+        let mut new = cur.as_counted_ptr().with_mark(cur.mark() | mark);
+        while self.link
+                .compare_exchange_weak(cur.as_counted_ptr(), new, Ordering::SeqCst, Ordering::SeqCst).is_err()
         {
-            cur = actual;
-            new = actual.with_mark(cur.mark() | mark);
+            cur = self.load_snapshot(guard);
+            new = cur.as_counted_ptr().with_mark(cur.mark() | mark);
         }
-        SnapshotPtr::new(guard.reserve_snapshot(cur), guard)
+        cur
     }
 }
 
