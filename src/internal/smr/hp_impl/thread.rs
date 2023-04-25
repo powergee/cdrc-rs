@@ -1,6 +1,7 @@
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, Ordering};
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::AtomicUsize;
 
 use super::domain::Domain;
 use super::hazard::ThreadRecord;
@@ -96,10 +97,15 @@ impl<'domain> Thread<'domain> {
 
 // stuff related to hazards
 impl<'domain> Thread<'domain> {
+    fn ref_counf(&self, idx: usize) -> &AtomicUsize {
+        &(unsafe { &(*self.hazards.hazptrs.load(Ordering::Acquire)).get_unchecked(idx) }.1)
+    }
+
     /// acquire hazard slot
     pub(crate) fn acquire(&self) -> usize {
         let idx = self.available_indices.borrow_mut().pop();
         if let Some(idx) = idx {
+            self.ref_counf(idx).store(1, Ordering::Release);
             idx
         } else {
             self.grow_array();
@@ -114,10 +120,13 @@ impl<'domain> Thread<'domain> {
         let new_size = size * 2;
         let mut new_array = Box::new(Vec::with_capacity(new_size));
         for i in 0..size {
-            new_array.push(AtomicPtr::new(array[i].load(Ordering::Relaxed)));
+            new_array.push((
+                AtomicPtr::new(array[i].0.load(Ordering::Acquire)),
+                AtomicUsize::new(array[i].1.load(Ordering::Acquire)),
+            ));
         }
         for _ in size..new_size {
-            new_array.push(AtomicPtr::new(ptr::null_mut()));
+            new_array.push((AtomicPtr::new(ptr::null_mut()), AtomicUsize::new(0)));
         }
         self.hazards
             .hazptrs
@@ -128,6 +137,7 @@ impl<'domain> Thread<'domain> {
 
     /// release hazard slot
     pub(crate) fn release(&mut self, idx: usize) {
+        assert_eq!(self.ref_counf(idx).load(Ordering::Acquire), 0);
         self.available_indices.borrow_mut().push(idx);
     }
 }

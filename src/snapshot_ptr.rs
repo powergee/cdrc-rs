@@ -32,7 +32,7 @@ where
 
     #[inline(always)]
     pub fn clone(&self, guard: &'g Guard) -> Self {
-        Self::new(guard.reserve_snapshot(self.as_counted_ptr()), guard)
+        Self::new(guard.reserve_snapshot(&self.acquired), guard)
     }
 
     /// # Safety
@@ -61,14 +61,6 @@ where
     #[inline(always)]
     pub fn is_null(&self) -> bool {
         self.acquired.is_null()
-    }
-
-    #[inline(always)]
-    pub fn clear(&mut self, guard: &Guard) {
-        if !self.is_null() && !self.acquired.is_protected() {
-            unsafe { guard.decrement_ref_cnt(self.acquired.as_counted_ptr().unmarked()) }
-        }
-        self.acquired.clear_protection();
     }
 
     #[inline(always)]
@@ -112,7 +104,10 @@ where
     #[inline(always)]
     fn drop(&mut self) {
         if !self.is_null() && !self.acquired.is_protected() {
-            self.clear(self.guard)
+            unsafe {
+                self.guard
+                    .decrement_ref_cnt(self.acquired.as_counted_ptr().unmarked())
+            };
         }
     }
 }

@@ -31,7 +31,6 @@ pub trait AcquiredPtr<T> {
     fn null() -> Self;
     fn is_null(&self) -> bool;
     fn is_protected(&self) -> bool;
-    fn clear_protection(&mut self);
     fn swap(p1: &mut Self, p2: &mut Self);
     fn eq(&self, other: &Self) -> bool;
 }
@@ -58,7 +57,7 @@ pub trait AcquireRetire {
     fn protect_snapshot<T>(&self, link: &Atomic<MarkedCntObjPtr<T>>) -> Self::AcquiredPtr<T>;
     /// Like `protect_snapshot`, but assuming that the caller already has an
     /// another snapshot containing the pointer.
-    fn reserve_snapshot<T>(&self, ptr: MarkedCntObjPtr<T>) -> Self::AcquiredPtr<T>;
+    fn reserve_snapshot<T>(&self, ptr: &Self::AcquiredPtr<T>) -> Self::AcquiredPtr<T>;
     fn release(&self);
     unsafe fn delete_object<T>(&self, ptr: *mut CountedObject<T>);
     unsafe fn retire<T>(&self, ptr: *mut CountedObject<T>, ret_type: RetireType);
@@ -138,6 +137,4 @@ pub trait AcquireRetire {
         assert!((*ptr).weak_count() >= 1);
         self.retire(ptr, RetireType::DecrementWeakCount);
     }
-
-    /* Interfaces to access & manage the acquired pointer */
 }

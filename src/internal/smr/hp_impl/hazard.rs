@@ -1,6 +1,7 @@
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use core::{mem, ptr};
+use std::sync::atomic::AtomicUsize;
 
 use super::thread::Thread;
 use super::DEFAULT_THREAD;
@@ -27,19 +28,22 @@ impl<'domain> HazardPointer<'domain> {
     #[inline]
     fn slot(&self) -> &AtomicPtr<u8> {
         unsafe {
-            let array = &*(*self.thread).hazards.hazptrs.load(Ordering::Relaxed);
-            array.get_unchecked(self.idx)
+            let array = &*(*self.thread).hazards.hazptrs.load(Ordering::Acquire);
+            &array.get_unchecked(self.idx).0
+        }
+    }
+
+    #[inline]
+    fn ref_count(&self) -> &AtomicUsize {
+        unsafe {
+            let array = &*(*self.thread).hazards.hazptrs.load(Ordering::Acquire);
+            &array.get_unchecked(self.idx).1
         }
     }
 
     /// Protect the given address.
     pub fn protect_raw<T>(&self, ptr: *mut T) {
         self.slot().store(ptr as *mut u8, Ordering::Release);
-    }
-
-    /// Release the protection awarded by this hazard pointer, if any.
-    pub fn reset_protection(&self) {
-        self.slot().store(ptr::null_mut(), Ordering::Release);
     }
 
     /// Check if `src` still points to `pointer`. If not, returns the current value.
@@ -77,10 +81,19 @@ impl<'domain> HazardPointer<'domain> {
     }
 }
 
+impl Clone for HazardPointer<'_> {
+    fn clone(&self) -> Self {
+        self.ref_count().fetch_add(1, Ordering::AcqRel);
+        Self { ..*self }
+    }
+}
+
 impl Drop for HazardPointer<'_> {
     fn drop(&mut self) {
-        self.reset_protection();
-        unsafe { (*(self.thread as *mut Thread)).release(self.idx) };
+        if self.ref_count().fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.slot().store(ptr::null_mut(), Ordering::Release);
+            unsafe { (*(self.thread as *mut Thread)).release(self.idx) };
+        }
     }
 }
 
@@ -99,7 +112,7 @@ pub struct ThreadRecord {
     pub(crate) hazptrs: AtomicPtr<HazardArray>,
 }
 
-pub(crate) type HazardArray = Vec<AtomicPtr<u8>>;
+pub(crate) type HazardArray = Vec<(AtomicPtr<u8>, AtomicUsize)>;
 
 impl ThreadRecords {
     pub(crate) const fn new() -> Self {
@@ -134,7 +147,9 @@ impl ThreadRecords {
 
     fn acquire_new(&self) -> (&ThreadRecord, Vec<usize>) {
         const HAZARD_ARRAY_INIT_SIZE: usize = 64;
-        let array = Vec::from(unsafe { mem::zeroed::<[AtomicPtr<u8>; HAZARD_ARRAY_INIT_SIZE]>() });
+        let array = Vec::from(unsafe {
+            mem::zeroed::<[(AtomicPtr<u8>, AtomicUsize); HAZARD_ARRAY_INIT_SIZE]>()
+        });
         let new = Box::leak(Box::new(ThreadRecord {
             hazptrs: AtomicPtr::new(Box::into_raw(Box::new(array))),
             next: ptr::null_mut(),
@@ -198,7 +213,7 @@ impl ThreadRecord {
 }
 
 pub(crate) struct ThreadHazardArrayIter<'domain> {
-    array: *const [AtomicPtr<u8>],
+    array: *const [(AtomicPtr<u8>, AtomicUsize)],
     idx: usize,
     _hp: HazardPointer<'domain>,
 }
@@ -210,7 +225,7 @@ impl<'domain> Iterator for ThreadHazardArrayIter<'domain> {
         let array = unsafe { &*self.array };
         for i in self.idx..array.len() {
             self.idx += 1;
-            let slot = unsafe { array.get_unchecked(i) };
+            let slot = unsafe { &array.get_unchecked(i).0 };
             let value = slot.load(Ordering::Acquire);
             if !value.is_null() {
                 return Some(value);

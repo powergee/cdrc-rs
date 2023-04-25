@@ -56,11 +56,6 @@ impl<T> AcquiredPtr<T> for AcquiredPtrEBR<T> {
     }
 
     #[inline(always)]
-    fn clear_protection(&mut self) {
-        // For EBR, there's no action which unprotect a specific block.
-    }
-
-    #[inline(always)]
     fn swap(p1: &mut Self, p2: &mut Self) {
         mem::swap(p1, p2);
     }
@@ -105,15 +100,20 @@ impl AcquireRetire for GuardEBR {
         &self,
         link: &atomic::Atomic<MarkedCntObjPtr<T>>,
     ) -> Self::AcquiredPtr<T> {
-        self.reserve_snapshot(link.load(Ordering::Acquire))
-    }
-
-    #[inline(always)]
-    fn reserve_snapshot<T>(&self, ptr: MarkedCntObjPtr<T>) -> Self::AcquiredPtr<T> {
+        let ptr = link.load(Ordering::Acquire);
         if !ptr.is_null() && unsafe { ptr.deref() }.use_count() == 0 {
             AcquiredPtrEBR(MarkedCntObjPtr::null())
         } else {
             AcquiredPtrEBR(ptr)
+        }
+    }
+
+    #[inline(always)]
+    fn reserve_snapshot<T>(&self, ptr: &Self::AcquiredPtr<T>) -> Self::AcquiredPtr<T> {
+        if !ptr.is_null() && unsafe { ptr.0.deref() }.use_count() == 0 {
+            AcquiredPtrEBR(MarkedCntObjPtr::null())
+        } else {
+            AcquiredPtrEBR(ptr.0)
         }
     }
 

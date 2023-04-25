@@ -191,66 +191,6 @@ where
         }
     }
 
-    /// Atomically compares the underlying pointer with expected, and if they refer to
-    /// the same managed object, replaces the current pointer with a copy of desired
-    /// (incrementing its reference count) and returns true. Otherwise, returns false.
-    ///
-    /// NOTE: `compare_exchange_A_B` variants are remaining for backward compatibility.
-    #[inline(always)]
-    pub fn compare_exchange_rc_rc<'g>(
-        &self,
-        expected: &RcPtr<'g, T, Guard>,
-        desired: &RcPtr<'g, T, Guard>,
-        guard: &'g Guard,
-    ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
-        self.compare_exchange(expected, desired, guard)
-    }
-
-    /// Atomically compares the underlying pointer with expected, and if they refer to
-    /// the same managed object, replaces the current pointer with a copy of desired
-    /// (incrementing its reference count) and returns true. Otherwise, returns false.
-    ///
-    /// NOTE: `compare_exchange_A_B` variants are remaining for backward compatibility.
-    #[inline(always)]
-    pub fn compare_exchange_ss_rc<'g>(
-        &self,
-        expected: &SnapshotPtr<'g, T, Guard>,
-        desired: &RcPtr<'g, T, Guard>,
-        guard: &'g Guard,
-    ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
-        self.compare_exchange(expected, desired, guard)
-    }
-
-    /// Atomically compares the underlying pointer with expected, and if they refer to
-    /// the same managed object, replaces the current pointer with a copy of desired
-    /// (incrementing its reference count) and returns true. Otherwise, returns false.
-    ///
-    /// NOTE: `compare_exchange_A_B` variants are remaining for backward compatibility.
-    #[inline(always)]
-    pub fn compare_exchange_rc_ss<'g>(
-        &self,
-        expected: &RcPtr<'g, T, Guard>,
-        desired: &SnapshotPtr<'g, T, Guard>,
-        guard: &'g Guard,
-    ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
-        self.compare_exchange(expected, desired, guard)
-    }
-
-    /// Atomically compares the underlying pointer with expected, and if they refer to
-    /// the same managed object, replaces the current pointer with a copy of desired
-    /// (incrementing its reference count) and returns true. Otherwise, returns false.
-    ///
-    /// NOTE: `compare_exchange_A_B` variants are remaining for backward compatibility.
-    #[inline(always)]
-    pub fn compare_exchange_ss_ss<'g>(
-        &self,
-        expected: &SnapshotPtr<'g, T, Guard>,
-        desired: &SnapshotPtr<'g, T, Guard>,
-        guard: &'g Guard,
-    ) -> Result<(), SnapshotPtr<'g, T, Guard>> {
-        self.compare_exchange(expected, desired, guard)
-    }
-
     #[inline(always)]
     fn compare_exchange_impl<'g>(
         &self,
@@ -291,29 +231,45 @@ where
     {
         let expected_ptr = expected.as_counted_ptr();
         let desired_ptr = expected_ptr.with_mark(mark);
-        match self.link.compare_exchange(
-            expected_ptr,
-            desired_ptr,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        ) {
-            Ok(_) => Ok(()),
-            Err(current) => Err(SnapshotPtr::new(guard.reserve_snapshot(current), guard)),
+        loop {
+            match self
+                .link
+                .compare_exchange(
+                    expected_ptr,
+                    desired_ptr,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst
+                )
+            {
+                Ok(_) => return Ok(()),
+                Err(_) => {
+                    let loaded = self.load_snapshot(guard);
+                    if loaded.as_usize() != expected.as_usize() {
+                        return Err(loaded);
+                    }
+                }
+            }
         }
     }
 
     #[inline(always)]
     pub fn fetch_or<'g>(&self, mark: usize, guard: &'g Guard) -> SnapshotPtr<'g, T, Guard> {
-        let mut cur = self.link.load(Ordering::SeqCst);
-        let mut new = cur.with_mark(cur.mark() | mark);
-        while let Err(actual) =
-            self.link
-                .compare_exchange_weak(cur, new, Ordering::SeqCst, Ordering::SeqCst)
+        let mut cur = self.load_snapshot(guard);
+        let mut new = cur.as_counted_ptr().with_mark(cur.mark() | mark);
+        while self
+            .link
+            .compare_exchange(
+                cur.as_counted_ptr(),
+                new,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_err()
         {
-            cur = actual;
-            new = actual.with_mark(cur.mark() | mark);
+            cur = self.load_snapshot(guard);
+            new = cur.as_counted_ptr().with_mark(cur.mark() | mark);
         }
-        SnapshotPtr::new(guard.reserve_snapshot(cur), guard)
+        cur
     }
 }
 
