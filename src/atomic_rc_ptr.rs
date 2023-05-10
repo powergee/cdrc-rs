@@ -147,6 +147,11 @@ where
         SnapshotPtr::new(guard.protect_snapshot(&self.link), guard)
     }
 
+    #[inline(always)]
+    pub fn load_snapshot_with<'g>(&self, dst: &mut SnapshotPtr<'g, T, Guard>, guard: &'g Guard) {
+        guard.protect_snapshot_with(&self.link, &mut dst.acquired)
+    }
+
     /// Swap the currently stored shared pointer with the given shared pointer.
     /// This operation is thread-safe.
     /// (It is equivalent to `exchange` from the original implementation.)

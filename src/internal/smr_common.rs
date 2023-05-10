@@ -56,10 +56,14 @@ pub trait AcquireRetire {
     /// something, but might need to reserve nothing
     fn reserve_nothing<T>(&self) -> Self::AcquiredPtr<T>;
     fn protect_snapshot<T>(&self, link: &Atomic<MarkedCntObjPtr<T>>) -> Self::AcquiredPtr<T>;
+    fn protect_snapshot_with<T>(
+        &self,
+        link: &Atomic<MarkedCntObjPtr<T>>,
+        dst: &mut Self::AcquiredPtr<T>,
+    );
     /// Like `protect_snapshot`, but assuming that the caller already has an
     /// another snapshot containing the pointer.
     fn reserve_snapshot<T>(&self, ptr: MarkedCntObjPtr<T>) -> Self::AcquiredPtr<T>;
-    fn release(&self);
     unsafe fn delete_object<T>(&self, ptr: *mut CountedObject<T>);
     unsafe fn retire<T>(&self, ptr: *mut CountedObject<T>, ret_type: RetireType);
 

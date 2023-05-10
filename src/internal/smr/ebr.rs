@@ -109,17 +109,21 @@ impl AcquireRetire for GuardEBR {
     }
 
     #[inline(always)]
+    fn protect_snapshot_with<T>(
+        &self,
+        link: &atomic::Atomic<MarkedCntObjPtr<T>>,
+        dst: &mut Self::AcquiredPtr<T>,
+    ) {
+        *dst = self.reserve_snapshot(link.load(Ordering::Acquire));
+    }
+
+    #[inline(always)]
     fn reserve_snapshot<T>(&self, ptr: MarkedCntObjPtr<T>) -> Self::AcquiredPtr<T> {
         if !ptr.is_null() && unsafe { ptr.deref() }.use_count() == 0 {
             AcquiredPtrEBR(MarkedCntObjPtr::null())
         } else {
             AcquiredPtrEBR(ptr)
         }
-    }
-
-    #[inline(always)]
-    fn release(&self) {
-        // For EBR, there's no action which is equivalent to releasing.
     }
 
     #[inline(always)]

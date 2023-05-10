@@ -9,7 +9,7 @@ where
 {
     // Guard::AcquiredPtr is usually a wrapper struct
     // containing MarkedCntObjPtr.
-    acquired: Guard::AcquiredPtr<T>,
+    pub(crate) acquired: Guard::AcquiredPtr<T>,
     guard: &'g Guard,
 }
 

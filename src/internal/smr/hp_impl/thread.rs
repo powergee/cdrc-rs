@@ -6,17 +6,17 @@ use super::domain::Domain;
 use super::hazard::ThreadRecord;
 use super::retire::Retired;
 
-pub struct Thread<'domain> {
-    pub(crate) domain: &'domain Domain,
-    pub(crate) hazards: &'domain ThreadRecord,
+pub struct Thread {
+    pub(crate) domain: *const Domain,
+    pub(crate) hazards: *const ThreadRecord,
     /// available slots of hazard array
     pub(crate) available_indices: RefCell<Vec<usize>>,
     pub(crate) retired: RefCell<Vec<Retired>>,
     pub(crate) count: Cell<usize>,
 }
 
-impl<'domain> Thread<'domain> {
-    pub fn new(domain: &'domain Domain) -> Self {
+impl Thread {
+    pub fn new(domain: &Domain) -> Self {
         let (thread, available_indices) = domain.threads.acquire();
         Self {
             domain,
@@ -29,15 +29,19 @@ impl<'domain> Thread<'domain> {
 }
 
 // stuff related to reclamation
-impl<'domain> Thread<'domain> {
+impl Thread {
     const COUNTS_BETWEEN_FLUSH: usize = 64;
     const COUNTS_BETWEEN_COLLECT: usize = 128;
 
+    fn domain(&self) -> &Domain {
+        unsafe { &*self.domain }
+    }
+
     fn flush_retireds(&self) {
-        self.domain
+        self.domain()
             .num_garbages
             .fetch_add(self.retired.borrow().len(), Ordering::AcqRel);
-        self.domain.retireds.push(self.retired.take())
+        self.domain().retireds.push(self.retired.take())
     }
 
     // NOTE: T: Send not required because we reclaim only locally.
@@ -67,7 +71,7 @@ impl<'domain> Thread<'domain> {
 
     #[inline]
     pub(crate) fn do_reclamation(&self) {
-        let retireds = self.domain.retireds.pop_all();
+        let retireds = self.domain().retireds.pop_all();
         let retireds_len = retireds.len();
         if retireds.is_empty() {
             return;
@@ -75,7 +79,7 @@ impl<'domain> Thread<'domain> {
 
         membarrier::heavy();
 
-        let guarded_ptrs = self.domain.collect_guarded_ptrs(self);
+        let guarded_ptrs = self.domain().collect_guarded_ptrs(self);
         let not_freed: Vec<Retired> = retireds
             .into_iter()
             .filter_map(|element| {
@@ -87,16 +91,17 @@ impl<'domain> Thread<'domain> {
                 }
             })
             .collect();
-        self.domain
+        self.domain()
             .num_garbages
             .fetch_sub(retireds_len - not_freed.len(), Ordering::AcqRel);
-        self.domain.retireds.push(not_freed);
+        self.domain().retireds.push(not_freed);
     }
 }
 
 // stuff related to hazards
-impl<'domain> Thread<'domain> {
+impl Thread {
     /// acquire hazard slot
+    #[inline(always)]
     pub(crate) fn acquire(&self) -> usize {
         let idx = self.available_indices.borrow_mut().pop();
         if let Some(idx) = idx {
@@ -108,7 +113,7 @@ impl<'domain> Thread<'domain> {
     }
 
     fn grow_array(&self) {
-        let array_ptr = self.hazards.hazptrs.load(Ordering::Relaxed);
+        let array_ptr = unsafe { &*self.hazards }.hazptrs.load(Ordering::Relaxed);
         let array = unsafe { &*array_ptr };
         let size = array.len();
         let new_size = size * 2;
@@ -119,7 +124,7 @@ impl<'domain> Thread<'domain> {
         for _ in size..new_size {
             new_array.push(AtomicPtr::new(ptr::null_mut()));
         }
-        self.hazards
+        unsafe { &*self.hazards }
             .hazptrs
             .store(Box::into_raw(new_array), Ordering::Release);
         unsafe { self.retire(array_ptr) };
@@ -132,7 +137,7 @@ impl<'domain> Thread<'domain> {
     }
 }
 
-impl<'domain> Drop for Thread<'domain> {
+impl Drop for Thread {
     fn drop(&mut self) {
         self.flush_retireds();
         membarrier::heavy();
@@ -140,6 +145,6 @@ impl<'domain> Drop for Thread<'domain> {
         // WARNING: Dropping HazardPointer touches available_indices. So available_indices MUST be
         // dropped after hps. For the same reason, Thread::drop MUST NOT acquire HazardPointer.
         self.available_indices.borrow_mut().clear();
-        self.domain.threads.release(self.hazards);
+        self.domain().threads.release(unsafe { &*self.hazards });
     }
 }

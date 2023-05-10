@@ -6,29 +6,35 @@ use super::thread::Thread;
 use super::DEFAULT_THREAD;
 
 #[derive(Debug)]
-pub struct HazardPointer<'domain> {
-    thread: *const Thread<'domain>,
+pub struct HazardPointer {
+    thread: *const Thread,
     idx: usize,
 }
 
-impl Default for HazardPointer<'static> {
+impl Default for HazardPointer {
     fn default() -> Self {
-        DEFAULT_THREAD.with(|t| HazardPointer::new(&mut t.borrow()))
+        DEFAULT_THREAD.with(|t| HazardPointer::new(t.deref()))
     }
 }
 
-impl<'domain> HazardPointer<'domain> {
+impl HazardPointer {
     /// Create a hazard pointer in the given thread
-    pub fn new(thread: &Thread<'domain>) -> Self {
+    #[inline(always)]
+    pub fn new(thread: &Thread) -> Self {
         let idx = thread.acquire();
         Self { thread, idx }
     }
 
     #[inline]
+    unsafe fn hazard_array(&self) -> &HazardArray {
+        &*(&*(*self.thread).hazards).hazptrs.load(Ordering::Acquire)
+    }
+
+    #[inline]
     fn slot(&self) -> &AtomicPtr<u8> {
         unsafe {
-            let array = &*(*self.thread).hazards.hazptrs.load(Ordering::Relaxed);
-            array.get_unchecked(self.idx)
+            let array = self.hazard_array();
+            &array.get_unchecked(self.idx)
         }
     }
 
@@ -77,7 +83,7 @@ impl<'domain> HazardPointer<'domain> {
     }
 }
 
-impl Drop for HazardPointer<'_> {
+impl Drop for HazardPointer {
     fn drop(&mut self) {
         self.reset_protection();
         unsafe { (*(self.thread as *mut Thread)).release(self.idx) };
@@ -186,13 +192,14 @@ impl<'domain> Iterator for ThreadRecordsIter<'domain> {
 }
 
 impl ThreadRecord {
-    pub(crate) fn iter<'domain>(&self, reader: &Thread<'domain>) -> ThreadHazardArrayIter<'domain> {
+    pub(crate) fn iter<'domain>(&self, reader: &Thread) -> ThreadHazardArrayIter<'domain> {
         let hp = HazardPointer::new(reader);
         let array = hp.protect(&self.hazptrs);
         ThreadHazardArrayIter {
             array: unsafe { &*array }.as_slice(),
             idx: 0,
             _hp: hp,
+            _marker: PhantomData,
         }
     }
 }
@@ -200,7 +207,8 @@ impl ThreadRecord {
 pub(crate) struct ThreadHazardArrayIter<'domain> {
     array: *const [AtomicPtr<u8>],
     idx: usize,
-    _hp: HazardPointer<'domain>,
+    _hp: HazardPointer,
+    _marker: PhantomData<&'domain ()>,
 }
 
 impl<'domain> Iterator for ThreadHazardArrayIter<'domain> {
