@@ -5,6 +5,8 @@ mod local_ptr;
 mod rc_ptr;
 mod snapshot_ptr;
 
+pub use crossbeam_epoch as ebr;
+
 pub use internal::{AcquireRetire, AcquiredPtr, CountedObject, EjectAction, GuardEBR, RetireType};
 
 pub use atomic_rc_ptr::AtomicRcPtr;
