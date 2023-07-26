@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use crate::{
     internal::{AcquireRetire, AcquiredPtr, MarkedCntObjPtr},
     LocalPtr, RcPtr,
@@ -10,7 +12,7 @@ where
     // Guard::AcquiredPtr is usually a wrapper struct
     // containing MarkedCntObjPtr.
     acquired: Guard::AcquiredPtr<T>,
-    guard: &'g Guard,
+    _marker: PhantomData<&'g ()>,
 }
 
 impl<'g, T, Guard> SnapshotPtr<'g, T, Guard>
@@ -18,21 +20,24 @@ where
     Guard: AcquireRetire,
 {
     #[inline(always)]
-    pub fn new(acquired: Guard::AcquiredPtr<T>, guard: &'g Guard) -> Self {
-        Self { acquired, guard }
+    pub fn new(acquired: Guard::AcquiredPtr<T>) -> Self {
+        Self {
+            acquired,
+            _marker: PhantomData,
+        }
     }
 
     #[inline(always)]
-    pub fn null(guard: &'g Guard) -> Self {
+    pub fn null(_: &'g Guard) -> Self {
         Self {
             acquired: <Guard as AcquireRetire>::AcquiredPtr::null(),
-            guard,
+            _marker: PhantomData,
         }
     }
 
     #[inline(always)]
     pub fn clone(&self, guard: &'g Guard) -> Self {
-        Self::new(guard.reserve_snapshot(self.as_counted_ptr()), guard)
+        Self::new(guard.reserve_snapshot(self.as_counted_ptr()))
     }
 
     /// # Safety
@@ -112,7 +117,7 @@ where
     #[inline(always)]
     fn drop(&mut self) {
         if !self.is_null() && !self.acquired.is_protected() {
-            self.clear(self.guard)
+            // self.clear(self.guard)
         }
     }
 }
@@ -187,7 +192,7 @@ where
     }
 
     #[inline(always)]
-    fn as_rc(self) -> crate::RcPtr<'g, T, Guard> {
-        RcPtr::from_snapshot(&self, self.guard)
+    fn as_rc(self, guard: &'g Guard) -> crate::RcPtr<'g, T, Guard> {
+        RcPtr::from_snapshot(&self, guard)
     }
 }

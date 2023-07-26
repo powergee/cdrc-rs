@@ -17,5 +17,5 @@ where
     fn with_mark(self, mark: usize) -> Self;
     fn unmarked(self) -> Self;
     fn clone(&self, guard: &'g Guard) -> Self;
-    fn as_rc(self) -> RcPtr<'g, T, Guard>;
+    fn as_rc(self, guard: &'g Guard) -> RcPtr<'g, T, Guard>;
 }

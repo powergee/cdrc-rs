@@ -110,11 +110,7 @@ impl AcquireRetire for GuardEBR {
 
     #[inline(always)]
     fn reserve_snapshot<T>(&self, ptr: MarkedCntObjPtr<T>) -> Self::AcquiredPtr<T> {
-        if !ptr.is_null() && unsafe { ptr.deref() }.use_count() == 0 {
-            AcquiredPtrEBR(MarkedCntObjPtr::null())
-        } else {
-            AcquiredPtrEBR(ptr)
-        }
+        AcquiredPtrEBR(ptr)
     }
 
     #[inline(always)]

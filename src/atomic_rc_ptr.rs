@@ -144,7 +144,7 @@ where
 
     #[inline(always)]
     pub fn load_snapshot<'g>(&self, guard: &'g Guard) -> SnapshotPtr<'g, T, Guard> {
-        SnapshotPtr::new(guard.protect_snapshot(&self.link), guard)
+        SnapshotPtr::new(guard.protect_snapshot(&self.link))
     }
 
     /// Swap the currently stored shared pointer with the given shared pointer.
@@ -268,7 +268,7 @@ where
                 }
                 Ok(())
             }
-            Err(current) => Err(SnapshotPtr::new(guard.reserve_snapshot(current), guard)),
+            Err(current) => Err(SnapshotPtr::new(guard.reserve_snapshot(current))),
         }
     }
 
@@ -291,7 +291,7 @@ where
             Ordering::SeqCst,
         ) {
             Ok(_) => Ok(()),
-            Err(current) => Err(SnapshotPtr::new(guard.reserve_snapshot(current), guard)),
+            Err(current) => Err(SnapshotPtr::new(guard.reserve_snapshot(current))),
         }
     }
 
@@ -299,8 +299,15 @@ where
     pub fn fetch_or<'g>(&self, mark: usize, guard: &'g Guard) -> SnapshotPtr<'g, T, Guard> {
         let mut cur = self.load_snapshot(guard);
         let mut new = cur.as_counted_ptr().with_mark(cur.mark() | mark);
-        while self.link
-                .compare_exchange_weak(cur.as_counted_ptr(), new, Ordering::SeqCst, Ordering::SeqCst).is_err()
+        while self
+            .link
+            .compare_exchange_weak(
+                cur.as_counted_ptr(),
+                new,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_err()
         {
             cur = self.load_snapshot(guard);
             new = cur.as_counted_ptr().with_mark(cur.mark() | mark);

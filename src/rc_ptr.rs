@@ -236,7 +236,7 @@ where
     }
 
     #[inline(always)]
-    fn as_rc(self) -> RcPtr<'g, T, Guard> {
+    fn as_rc(self, _: &'g Guard) -> RcPtr<'g, T, Guard> {
         self
     }
 }
