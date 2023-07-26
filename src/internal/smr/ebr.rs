@@ -114,8 +114,10 @@ impl AcquireRetire for GuardEBR {
     }
 
     #[inline(always)]
-    fn release(&self) {
-        // For EBR, there's no action which is equivalent to releasing.
+    fn release(&mut self) {
+        if let Some(guard) = &mut self.guard {
+            guard.repin();
+        }
     }
 
     #[inline(always)]

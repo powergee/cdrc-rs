@@ -58,7 +58,7 @@ pub trait AcquireRetire {
     /// Like `protect_snapshot`, but assuming that the caller already has an
     /// another snapshot containing the pointer.
     fn reserve_snapshot<T>(&self, ptr: MarkedCntObjPtr<T>) -> Self::AcquiredPtr<T>;
-    fn release(&self);
+    fn release(&mut self);
     unsafe fn delete_object<T>(&self, ptr: *mut CountedObject<T>);
     unsafe fn retire<T>(&self, ptr: *mut CountedObject<T>, ret_type: RetireType);
 
