@@ -116,7 +116,10 @@ impl AcquireRetire for GuardEBR {
     #[inline(always)]
     fn release(&mut self) {
         if let Some(guard) = &mut self.guard {
-            guard.repin();
+            // HACK: `repin_after` is similar to `repin`, but it collects garbages
+            // at specific intervals.
+            // Just using `repin` makes a huge garbages...
+            guard.repin_after(|| {});
         }
     }
 
