@@ -1,19 +1,21 @@
 use std::mem;
 
 use atomic::Ordering;
-use crossbeam_epoch::LocalHandle;
+use crossbeam::epoch::LocalHandle;
 
 use crate::internal::utils::CountedObject;
 use crate::internal::{AcquireRetire, AcquiredPtr, MarkedCntObjPtr, RetireType};
 
 pub struct GuardEBR {
-    guard: Option<crossbeam_epoch::Guard>,
+    guard: Option<crossbeam::epoch::Guard>,
 }
 
 impl GuardEBR {
     #[inline]
     pub fn handle_with(local: &LocalHandle) -> Self {
-        Self { guard: Some(local.pin()) }
+        Self {
+            guard: Some(local.pin()),
+        }
     }
 
     #[inline]
@@ -25,9 +27,9 @@ impl GuardEBR {
     }
 }
 
-impl From<crossbeam_epoch::Guard> for GuardEBR {
+impl From<crossbeam::epoch::Guard> for GuardEBR {
     #[inline(always)]
-    fn from(guard: crossbeam_epoch::Guard) -> Self {
+    fn from(guard: crossbeam::epoch::Guard) -> Self {
         Self { guard: Some(guard) }
     }
 }
@@ -92,7 +94,7 @@ impl AcquireRetire for GuardEBR {
 
     #[inline(always)]
     fn handle() -> Self {
-        Self::from(crossbeam_epoch::pin())
+        Self::from(crossbeam::epoch::pin())
     }
 
     #[inline(always)]
