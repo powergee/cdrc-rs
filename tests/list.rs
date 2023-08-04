@@ -1,5 +1,5 @@
 use atomic::Ordering;
-use cdrc_rs::{AcquireRetire, AtomicRcPtr, RcPtr, SnapshotPtr};
+use cdrc_hp::{AcquireRetire, AtomicRcPtr, RcPtr, SnapshotPtr};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem;
@@ -329,9 +329,9 @@ pub mod tests {
     extern crate rand;
     use super::ConcurrentMap;
     use super::HList;
-    use cdrc_rs::AcquireRetire;
-    use cdrc_rs::GuardEBR;
-    use cdrc_rs::GuardHP;
+    use cdrc_hp::AcquireRetire;
+    use cdrc_hp::GuardEBR;
+    use cdrc_hp::GuardHP;
     use crossbeam_utils::thread;
     use rand::prelude::*;
 
