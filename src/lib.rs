@@ -20,3 +20,10 @@ pub type AtomicRcPtrEBR<T> = AtomicRcPtr<T, GuardEBR>;
 pub type RcPtrEBR<'g, T> = RcPtr<'g, T, GuardEBR>;
 /// SnapshotPtr using EBR
 pub type SnapshotPtrEBR<'g, T> = SnapshotPtr<'g, T, GuardEBR>;
+
+/// AtomicRcPtr using HP
+pub type AtomicRcPtrHP<T> = AtomicRcPtr<T, GuardHP>;
+/// RcPtr using EBR
+pub type RcPtrHP<'g, T> = RcPtr<'g, T, GuardHP>;
+/// SnapshotPtr using EBR
+pub type SnapshotPtrHP<'g, T> = SnapshotPtr<'g, T, GuardHP>;
