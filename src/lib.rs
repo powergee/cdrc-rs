@@ -1,9 +1,11 @@
 #![feature(associated_type_bounds)]
 mod internal;
-mod pointers;
+mod strongs;
+mod weaks;
 
 pub use internal::{Acquired, Counted, EjectAction, Guard, GuardEBR, RetireType, TaggedCnt};
-pub use pointers::*;
+pub use strongs::*;
+pub use weaks::*;
 
 /// AtomicRc using EBR
 pub type AtomicRcEBR<T> = AtomicRc<T, GuardEBR>;

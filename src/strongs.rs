@@ -78,7 +78,7 @@ where
         _: &'g G,
     ) -> Result<Rc<T, G>, CompareExchangeErrorRc<T, P>>
     where
-        P: Pointer<T, G>,
+        P: StrongPtr<T, G>,
     {
         match self
             .link
@@ -236,7 +236,7 @@ where
     }
 
     #[inline(always)]
-    pub fn use_count(&self) -> u32 {
+    pub fn ref_count(&self) -> u32 {
         unsafe { self.ptr.deref().ref_count() }
     }
 
@@ -399,7 +399,7 @@ where
     pub(crate) tag: usize,
 }
 
-pub trait Pointer<T, G> {
+pub trait StrongPtr<T, G> {
     fn as_ptr(&self) -> TaggedCnt<T>;
 
     /// Consumes the aquired pointer, incrementing the reference count if we didn't increment
@@ -413,7 +413,7 @@ pub trait Pointer<T, G> {
     fn into_ref_count(self);
 }
 
-impl<T, G> Pointer<T, G> for Rc<T, G>
+impl<T, G> StrongPtr<T, G> for Rc<T, G>
 where
     G: Guard,
 {
@@ -428,7 +428,7 @@ where
     }
 }
 
-impl<T, G> Pointer<T, G> for Snapshot<T, G>
+impl<T, G> StrongPtr<T, G> for Snapshot<T, G>
 where
     G: Guard,
 {
@@ -443,7 +443,7 @@ where
     }
 }
 
-impl<T, G> Pointer<T, G> for &Snapshot<T, G>
+impl<T, G> StrongPtr<T, G> for &Snapshot<T, G>
 where
     G: Guard,
 {
@@ -458,7 +458,7 @@ where
     }
 }
 
-impl<'s, T, G> Pointer<T, G> for TaggedSnapshot<'s, T, G>
+impl<'s, T, G> StrongPtr<T, G> for TaggedSnapshot<'s, T, G>
 where
     G: Guard,
 {
