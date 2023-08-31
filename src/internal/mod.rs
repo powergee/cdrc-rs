@@ -3,7 +3,7 @@ mod smr_common;
 mod utils;
 
 pub use smr::GuardEBR;
-pub use smr_common::{AcquireRetire, AcquiredPtr, RetireType};
-pub use utils::{CountedObject, EjectAction};
+pub use smr_common::{Acquired, Guard, RetireType};
+pub use utils::{Counted, EjectAction, TaggedCnt};
 
 pub(crate) use utils::*;

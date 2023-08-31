@@ -1,20 +1,13 @@
 #![feature(associated_type_bounds)]
-mod atomic_rc_ptr;
 mod internal;
-mod local_ptr;
-mod rc_ptr;
-mod snapshot_ptr;
+mod pointers;
 
-pub use internal::{AcquireRetire, AcquiredPtr, CountedObject, EjectAction, GuardEBR, RetireType};
+pub use internal::{Acquired, Counted, EjectAction, Guard, GuardEBR, RetireType, TaggedCnt};
+pub use pointers::*;
 
-pub use atomic_rc_ptr::AtomicRcPtr;
-pub use local_ptr::LocalPtr;
-pub use rc_ptr::RcPtr;
-pub use snapshot_ptr::SnapshotPtr;
-
-/// AtomicRcPtr using EBR
-pub type AtomicRcPtrEBR<T> = AtomicRcPtr<T, GuardEBR>;
-/// RcPtr using EBR
-pub type RcPtrEBR<'g, T> = RcPtr<'g, T, GuardEBR>;
-/// SnapshotPtr using EBR
-pub type SnapshotPtrEBR<'g, T> = SnapshotPtr<'g, T, GuardEBR>;
+/// AtomicRc using EBR
+pub type AtomicRcEBR<T> = AtomicRc<T, GuardEBR>;
+/// Rc using EBR
+pub type RcEBR<T> = Rc<T, GuardEBR>;
+/// Snapshot using EBR
+pub type SnapshotEBR<T> = Snapshot<T, GuardEBR>;
