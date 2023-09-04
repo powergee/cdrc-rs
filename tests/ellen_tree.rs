@@ -141,6 +141,7 @@ pub struct Finder<K, V, G: Guard> {
     l_other: Snapshot<Node<K, V, G>, G>,
     pupdate: Snapshot<Update<K, V, G>, G>,
     gpupdate: Snapshot<Update<K, V, G>, G>,
+    new_update: Snapshot<Update<K, V, G>, G>,
 }
 
 impl<K, V, G> Finder<K, V, G>
@@ -159,6 +160,7 @@ where
             l_other: Snapshot::new(),
             pupdate: Snapshot::new(),
             gpupdate: Snapshot::new(),
+            new_update: Snapshot::new(),
         }
     }
 
@@ -314,7 +316,7 @@ where
                 };
 
                 let new_pupdate = Rc::new(op, guard).with_tag(UpdateTag::IFLAG.bits());
-                finder.pupdate.protect(&new_pupdate, guard);
+                finder.new_update.protect(&new_pupdate, guard);
 
                 match p_node.update.compare_exchange(
                     finder.pupdate.as_ptr(),
@@ -324,7 +326,7 @@ where
                     guard,
                 ) {
                     Ok(_) => {
-                        self.help_insert(&finder.pupdate, &mut cursor.1, guard);
+                        self.help_insert(&finder.new_update, &mut cursor.1, guard);
                         return true;
                     }
                     Err(_) => {}
