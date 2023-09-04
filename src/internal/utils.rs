@@ -272,3 +272,7 @@ fn with_tag<T>(ptr: *mut T, tag: usize) -> *mut T {
 }
 
 pub type TaggedCnt<T> = Tagged<Counted<T>>;
+
+pub trait Pointer<T> {
+    fn as_ptr(&self) -> TaggedCnt<T>;
+}

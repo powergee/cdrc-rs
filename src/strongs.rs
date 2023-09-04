@@ -7,7 +7,7 @@ use std::{
 use atomic::{Atomic, Ordering};
 use static_assertions::const_assert;
 
-use crate::internal::{Acquired, Guard, Tagged, TaggedCnt};
+use crate::{Acquired, Guard, Pointer, Tagged, TaggedCnt};
 
 /// A result of unsuccessful `compare_exchange`.
 ///
@@ -19,10 +19,7 @@ pub struct CompareExchangeErrorRc<T, P> {
     pub actual: TaggedCnt<T>,
 }
 
-pub struct AtomicRc<T, G>
-where
-    G: Guard,
-{
+pub struct AtomicRc<T, G: Guard> {
     link: Atomic<TaggedCnt<T>>,
     _marker: PhantomData<G>,
 }
@@ -36,10 +33,7 @@ const_assert!(Atomic::<TaggedCnt<u8>>::is_lock_free());
 const_assert!(mem::size_of::<TaggedCnt<u8>>() == mem::size_of::<usize>());
 const_assert!(mem::size_of::<Atomic<TaggedCnt<u8>>>() == mem::size_of::<AtomicUsize>());
 
-impl<T, G> AtomicRc<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> AtomicRc<T, G> {
     #[inline(always)]
     pub fn new(obj: T, guard: &G) -> Self {
         Self {
@@ -78,7 +72,7 @@ where
         _: &'g G,
     ) -> Result<Rc<T, G>, CompareExchangeErrorRc<T, P>>
     where
-        P: StrongPtr<T, G>,
+        P: StrongPtr<T, G> + Pointer<T>,
     {
         match self
             .link
@@ -109,10 +103,7 @@ where
     }
 }
 
-impl<T, G> Drop for AtomicRc<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> Drop for AtomicRc<T, G> {
     #[inline(always)]
     fn drop(&mut self) {
         let ptr = self.link.load(Ordering::SeqCst);
@@ -125,28 +116,19 @@ where
     }
 }
 
-impl<T, G> Default for AtomicRc<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> Default for AtomicRc<T, G> {
     #[inline(always)]
     fn default() -> Self {
         Self::null()
     }
 }
 
-pub struct Rc<T, G>
-where
-    G: Guard,
-{
+pub struct Rc<T, G: Guard> {
     ptr: TaggedCnt<T>,
     _marker: PhantomData<G>,
 }
 
-impl<T, G> Rc<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> Rc<T, G> {
     #[inline(always)]
     pub fn null() -> Self {
         Self::new_without_incr(TaggedCnt::null())
@@ -270,10 +252,7 @@ where
     }
 }
 
-impl<T, G> Drop for Rc<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> Drop for Rc<T, G> {
     #[inline(always)]
     fn drop(&mut self) {
         if !self.is_null() {
@@ -282,28 +261,19 @@ where
     }
 }
 
-impl<T, G> PartialEq for Rc<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> PartialEq for Rc<T, G> {
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr
     }
 }
 
-pub struct Snapshot<T, G>
-where
-    G: Guard,
-{
+pub struct Snapshot<T, G: Guard> {
     // Hint: `G::Acquired` is usually a wrapper struct containing `TaggedCnt`.
     acquired: G::Acquired<T>,
 }
 
-impl<T, G> Snapshot<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> Snapshot<T, G> {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
@@ -363,27 +333,16 @@ where
     pub fn with_tag<'s>(&'s self, tag: usize) -> TaggedSnapshot<'s, T, G> {
         TaggedSnapshot { inner: self, tag }
     }
-
-    #[inline(always)]
-    pub fn as_usize(&self) -> usize {
-        self.as_ptr().as_usize()
-    }
 }
 
-impl<T, G> Drop for Snapshot<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> Drop for Snapshot<T, G> {
     #[inline(always)]
     fn drop(&mut self) {
         self.acquired.clear_protection();
     }
 }
 
-impl<T, G> PartialEq for Snapshot<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> PartialEq for Snapshot<T, G> {
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.acquired.eq(&other.acquired)
@@ -391,17 +350,36 @@ where
 }
 
 /// A reference of a [`Snapshot`] with a overwriting tag value.
-pub struct TaggedSnapshot<'s, T, G>
-where
-    G: Guard,
-{
+pub struct TaggedSnapshot<'s, T, G: Guard> {
     pub(crate) inner: &'s Snapshot<T, G>,
     pub(crate) tag: usize,
 }
 
-pub trait StrongPtr<T, G> {
-    fn as_ptr(&self) -> TaggedCnt<T>;
+impl<T, G: Guard> Pointer<T> for Rc<T, G> {
+    fn as_ptr(&self) -> TaggedCnt<T> {
+        self.ptr
+    }
+}
 
+impl<T, G: Guard> Pointer<T> for Snapshot<T, G> {
+    fn as_ptr(&self) -> TaggedCnt<T> {
+        self.acquired.as_ptr()
+    }
+}
+
+impl<T, G: Guard> Pointer<T> for &Snapshot<T, G> {
+    fn as_ptr(&self) -> TaggedCnt<T> {
+        self.acquired.as_ptr()
+    }
+}
+
+impl<'s, T, G: Guard> Pointer<T> for TaggedSnapshot<'s, T, G> {
+    fn as_ptr(&self) -> TaggedCnt<T> {
+        self.inner.acquired.as_ptr().with_tag(self.tag)
+    }
+}
+
+pub trait StrongPtr<T, G> {
     /// Consumes the aquired pointer, incrementing the reference count if we didn't increment
     /// it before.
     ///
@@ -413,14 +391,7 @@ pub trait StrongPtr<T, G> {
     fn into_ref_count(self);
 }
 
-impl<T, G> StrongPtr<T, G> for Rc<T, G>
-where
-    G: Guard,
-{
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.ptr
-    }
-
+impl<T, G: Guard> StrongPtr<T, G> for Rc<T, G> {
     fn into_ref_count(self) {
         // As we have a reference count already, we don't have to do anything, but
         // prevent calling a destructor which decrements it.
@@ -428,14 +399,7 @@ where
     }
 }
 
-impl<T, G> StrongPtr<T, G> for Snapshot<T, G>
-where
-    G: Guard,
-{
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.acquired.as_ptr()
-    }
-
+impl<T, G: Guard> StrongPtr<T, G> for Snapshot<T, G> {
     fn into_ref_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
             cnt.add_ref();
@@ -443,14 +407,7 @@ where
     }
 }
 
-impl<T, G> StrongPtr<T, G> for &Snapshot<T, G>
-where
-    G: Guard,
-{
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.acquired.as_ptr()
-    }
-
+impl<T, G: Guard> StrongPtr<T, G> for &Snapshot<T, G> {
     fn into_ref_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
             cnt.add_ref();
@@ -458,14 +415,7 @@ where
     }
 }
 
-impl<'s, T, G> StrongPtr<T, G> for TaggedSnapshot<'s, T, G>
-where
-    G: Guard,
-{
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.inner.acquired.as_ptr().with_tag(self.tag)
-    }
-
+impl<'s, T, G: Guard> StrongPtr<T, G> for TaggedSnapshot<'s, T, G> {
     fn into_ref_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
             cnt.add_ref();

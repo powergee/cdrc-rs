@@ -7,7 +7,7 @@ use std::{
 use atomic::{Atomic, Ordering};
 use static_assertions::const_assert;
 
-use crate::{internal::{Acquired, Guard, Tagged, TaggedCnt}, Rc};
+use crate::{Acquired, Guard, Pointer, Rc, StrongPtr, Tagged, TaggedCnt};
 
 /// A result of unsuccessful `compare_exchange`.
 ///
@@ -19,10 +19,7 @@ pub struct CompareExchangeErrorWeak<T, P> {
     pub actual: TaggedCnt<T>,
 }
 
-pub struct AtomicWeak<T, G>
-where
-    G: Guard,
-{
+pub struct AtomicWeak<T, G: Guard> {
     link: Atomic<TaggedCnt<T>>,
     _marker: PhantomData<G>,
 }
@@ -36,10 +33,7 @@ const_assert!(Atomic::<TaggedCnt<u8>>::is_lock_free());
 const_assert!(mem::size_of::<TaggedCnt<u8>>() == mem::size_of::<usize>());
 const_assert!(mem::size_of::<Atomic<TaggedCnt<u8>>>() == mem::size_of::<AtomicUsize>());
 
-impl<T, G> AtomicWeak<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> AtomicWeak<T, G> {
     #[inline(always)]
     pub fn null() -> Self {
         Self {
@@ -70,7 +64,7 @@ where
         _: &'g G,
     ) -> Result<Weak<T, G>, CompareExchangeErrorWeak<T, P>>
     where
-        P: WeakPtr<T, G>,
+        P: WeakPtr<T, G> + Pointer<T>,
     {
         match self
             .link
@@ -101,10 +95,17 @@ where
     }
 }
 
-impl<T, G> Drop for AtomicWeak<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> From<Weak<T, G>> for AtomicWeak<T, G> {
+    fn from(value: Weak<T, G>) -> Self {
+        let init_ptr = value.into_ptr();
+        Self {
+            link: Atomic::new(init_ptr),
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T, G: Guard> Drop for AtomicWeak<T, G> {
     #[inline(always)]
     fn drop(&mut self) {
         let ptr = self.link.load(Ordering::SeqCst);
@@ -117,28 +118,19 @@ where
     }
 }
 
-impl<T, G> Default for AtomicWeak<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> Default for AtomicWeak<T, G> {
     #[inline(always)]
     fn default() -> Self {
         Self::null()
     }
 }
 
-pub struct Weak<T, G>
-where
-    G: Guard,
-{
+pub struct Weak<T, G: Guard> {
     ptr: TaggedCnt<T>,
     _marker: PhantomData<G>,
 }
 
-impl<T, G> Weak<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> Weak<T, G> {
     #[inline(always)]
     pub fn null() -> Self {
         Self::new_without_incr(TaggedCnt::null())
@@ -153,7 +145,10 @@ where
     }
 
     #[inline(always)]
-    pub fn from_weak_snapshot<'g>(ptr: &WeakSnapshot<T, G>, guard: &'g G) -> Self {
+    pub fn from_strong<'g, P>(ptr: &P, guard: &'g G) -> Self
+    where
+        P: StrongPtr<T, G> + Pointer<T>,
+    {
         unsafe {
             if let Some(cnt) = ptr.as_ptr().untagged().as_ref() {
                 if guard.increment_weak_cnt(cnt) {
@@ -237,10 +232,7 @@ where
     }
 }
 
-impl<T, G> Drop for Weak<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> Drop for Weak<T, G> {
     #[inline(always)]
     fn drop(&mut self) {
         if !self.is_null() {
@@ -249,28 +241,19 @@ where
     }
 }
 
-impl<T, G> PartialEq for Weak<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> PartialEq for Weak<T, G> {
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr
     }
 }
 
-pub struct WeakSnapshot<T, G>
-where
-    G: Guard,
-{
+pub struct WeakSnapshot<T, G: Guard> {
     // Hint: `G::Acquired` is usually a wrapper struct containing `TaggedCnt`.
     acquired: G::Acquired<T>,
 }
 
-impl<T, G> WeakSnapshot<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> WeakSnapshot<T, G> {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
@@ -281,29 +264,6 @@ where
     #[inline]
     pub fn load(&mut self, from: &AtomicWeak<T, G>, guard: &G) {
         self.acquired = guard.protect_snapshot(&from.link);
-    }
-
-    /// # Safety
-    /// TODO
-    #[inline(always)]
-    pub unsafe fn deref<'g>(&self) -> &'g T {
-        self.acquired.ptr().deref().data()
-    }
-
-    /// # Safety
-    /// TODO
-    #[inline(always)]
-    pub unsafe fn deref_mut<'g>(&mut self) -> &'g mut T {
-        self.acquired.ptr_mut().deref_mut().data_mut()
-    }
-
-    #[inline(always)]
-    pub unsafe fn as_ref<'g>(&self) -> Option<&'g T> {
-        if self.is_null() {
-            None
-        } else {
-            Some(unsafe { self.deref() })
-        }
     }
 
     #[inline(always)]
@@ -330,27 +290,16 @@ where
     pub fn with_tag<'s>(&'s self, tag: usize) -> TaggedWeakSnapshot<'s, T, G> {
         TaggedWeakSnapshot { inner: self, tag }
     }
-
-    #[inline(always)]
-    pub fn as_usize(&self) -> usize {
-        self.as_ptr().as_usize()
-    }
 }
 
-impl<T, G> Drop for WeakSnapshot<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> Drop for WeakSnapshot<T, G> {
     #[inline(always)]
     fn drop(&mut self) {
         self.acquired.clear_protection();
     }
 }
 
-impl<T, G> PartialEq for WeakSnapshot<T, G>
-where
-    G: Guard,
-{
+impl<T, G: Guard> PartialEq for WeakSnapshot<T, G> {
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.acquired.eq(&other.acquired)
@@ -358,17 +307,36 @@ where
 }
 
 /// A reference of a [`WeakSnapshot`] with a overwriting tag value.
-pub struct TaggedWeakSnapshot<'s, T, G>
-where
-    G: Guard,
-{
+pub struct TaggedWeakSnapshot<'s, T, G: Guard> {
     pub(crate) inner: &'s WeakSnapshot<T, G>,
     pub(crate) tag: usize,
 }
 
-pub trait WeakPtr<T, G> {
-    fn as_ptr(&self) -> TaggedCnt<T>;
+impl<T, G: Guard> Pointer<T> for Weak<T, G> {
+    fn as_ptr(&self) -> TaggedCnt<T> {
+        self.ptr
+    }
+}
 
+impl<T, G: Guard> Pointer<T> for WeakSnapshot<T, G> {
+    fn as_ptr(&self) -> TaggedCnt<T> {
+        self.acquired.as_ptr()
+    }
+}
+
+impl<T, G: Guard> Pointer<T> for &WeakSnapshot<T, G> {
+    fn as_ptr(&self) -> TaggedCnt<T> {
+        self.acquired.as_ptr()
+    }
+}
+
+impl<'s, T, G: Guard> Pointer<T> for TaggedWeakSnapshot<'s, T, G> {
+    fn as_ptr(&self) -> TaggedCnt<T> {
+        self.inner.acquired.as_ptr().with_tag(self.tag)
+    }
+}
+
+pub trait WeakPtr<T, G> {
     /// Consumes the aquired pointer, incrementing the reference count if we didn't increment
     /// it before.
     ///
@@ -380,14 +348,7 @@ pub trait WeakPtr<T, G> {
     fn into_weak_count(self);
 }
 
-impl<T, G> WeakPtr<T, G> for Weak<T, G>
-where
-    G: Guard,
-{
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.ptr
-    }
-
+impl<T, G: Guard> WeakPtr<T, G> for Weak<T, G> {
     fn into_weak_count(self) {
         // As we have a reference count already, we don't have to do anything, but
         // prevent calling a destructor which decrements it.
@@ -395,14 +356,7 @@ where
     }
 }
 
-impl<T, G> WeakPtr<T, G> for WeakSnapshot<T, G>
-where
-    G: Guard,
-{
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.acquired.as_ptr()
-    }
-
+impl<T, G: Guard> WeakPtr<T, G> for WeakSnapshot<T, G> {
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
             cnt.add_ref();
@@ -410,14 +364,7 @@ where
     }
 }
 
-impl<T, G> WeakPtr<T, G> for &WeakSnapshot<T, G>
-where
-    G: Guard,
-{
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.acquired.as_ptr()
-    }
-
+impl<T, G: Guard> WeakPtr<T, G> for &WeakSnapshot<T, G> {
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
             cnt.add_ref();
@@ -425,14 +372,7 @@ where
     }
 }
 
-impl<'s, T, G> WeakPtr<T, G> for TaggedWeakSnapshot<'s, T, G>
-where
-    G: Guard,
-{
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.inner.acquired.as_ptr().with_tag(self.tag)
-    }
-
+impl<'s, T, G: Guard> WeakPtr<T, G> for TaggedWeakSnapshot<'s, T, G> {
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
             cnt.add_ref();
