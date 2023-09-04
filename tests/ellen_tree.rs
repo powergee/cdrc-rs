@@ -552,7 +552,10 @@ fn smoke<G: Guard>() {
                 let guard = &mut G::new();
                 for i in keys {
                     assert!(map.delete(&i, cursor, guard));
-                    assert_eq!(i.to_string(), *unsafe { cursor.0.l.deref() }.value.as_ref().unwrap());
+                    assert_eq!(
+                        i.to_string(),
+                        *unsafe { cursor.0.l.deref() }.value.as_ref().unwrap()
+                    );
                     guard.clear();
                 }
             });
@@ -571,7 +574,10 @@ fn smoke<G: Guard>() {
                 let guard = &mut G::new();
                 for i in keys {
                     assert!(map.find(&i, cursor, guard));
-                    assert_eq!(i.to_string(), *unsafe { cursor.0.l.deref() }.value.as_ref().unwrap());
+                    assert_eq!(
+                        i.to_string(),
+                        *unsafe { cursor.0.l.deref() }.value.as_ref().unwrap()
+                    );
                     guard.clear();
                 }
             });

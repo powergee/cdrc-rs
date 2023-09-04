@@ -337,7 +337,7 @@ impl<T, G: Guard> Snapshot<T, G> {
         // project/API structure.
         self.acquired = match guard.protect_snapshot(&from.link) {
             Some(acquired) => acquired,
-            None => return false
+            None => return false,
         };
         true
     }
