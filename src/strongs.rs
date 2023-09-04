@@ -7,7 +7,7 @@ use std::{
 use atomic::{Atomic, Ordering};
 use static_assertions::const_assert;
 
-use crate::{Acquired, Guard, Pointer, Tagged, TaggedCnt};
+use crate::{Acquired, AtomicWeak, Guard, Pointer, Tagged, TaggedCnt};
 
 /// A result of unsuccessful `compare_exchange`.
 ///
@@ -15,8 +15,8 @@ use crate::{Acquired, Guard, Pointer, Tagged, TaggedCnt};
 pub struct CompareExchangeErrorRc<T, P> {
     /// The `desired` pointer which was given as a parameter of `compare_exchange`.
     pub desired: P,
-    /// The actual pointer value inside the atomic pointer.
-    pub actual: TaggedCnt<T>,
+    /// The current pointer value inside the atomic pointer.
+    pub current: TaggedCnt<T>,
 }
 
 pub struct AtomicRc<T, G: Guard> {
@@ -89,7 +89,50 @@ impl<T, G: Guard> AtomicRc<T, G> {
                 desired.into_ref_count();
                 Ok(rc)
             }
-            Err(e) => Err(CompareExchangeErrorRc { desired, actual: e }),
+            Err(e) => Err(CompareExchangeErrorRc {
+                desired,
+                current: e,
+            }),
+        }
+    }
+
+    /// Atomically compares the underlying pointer with expected, and if they refer to
+    /// the same managed object, replaces the current pointer with a copy of desired
+    /// (incrementing its reference count) and returns true. Otherwise, returns false.
+    ///
+    /// It is guaranteed that the current pointer on a failure is protected by `current_snap`.
+    /// It is lock-free but not wait-free. Use `compare_exchange` for an wait-free implementation.
+    #[inline(always)]
+    pub fn compare_exchange_protecting_current<'g, P>(
+        &self,
+        expected: TaggedCnt<T>,
+        mut desired: P,
+        current_snap: &mut Snapshot<T, G>,
+        success: Ordering,
+        failure: Ordering,
+        guard: &'g G,
+    ) -> Result<Rc<T, G>, CompareExchangeErrorRc<T, P>>
+    where
+        P: StrongPtr<T, G> + Pointer<T>,
+    {
+        loop {
+            current_snap.load(self, guard);
+            if current_snap.as_ptr() != expected {
+                return Err(CompareExchangeErrorRc {
+                    desired,
+                    current: current_snap.as_ptr(),
+                });
+            }
+            match self.compare_exchange(expected, desired, success, failure, guard) {
+                Ok(rc) => return Ok(rc),
+                Err(e) => {
+                    if e.current == current_snap.as_ptr() {
+                        return Err(e);
+                    } else {
+                        desired = e.desired;
+                    }
+                }
+            }
         }
     }
 
@@ -283,7 +326,25 @@ impl<T, G: Guard> Snapshot<T, G> {
 
     #[inline]
     pub fn load(&mut self, from: &AtomicRc<T, G>, guard: &G) {
-        self.acquired = guard.protect_snapshot(&from.link);
+        self.acquired = guard
+            .protect_snapshot(&from.link)
+            .expect("The reference count cannot be 0, when we are loading from `AtomicRc`");
+    }
+
+    #[inline]
+    pub fn load_from_weak(&mut self, from: &AtomicWeak<T, G>, guard: &G) -> bool {
+        // TODO: Referencing weak variants from strong one is ugly... Find a better
+        // project/API structure.
+        self.acquired = match guard.protect_snapshot(&from.link) {
+            Some(acquired) => acquired,
+            None => return false
+        };
+        true
+    }
+
+    #[inline]
+    pub fn protect(&mut self, ptr: &Rc<T, G>, guard: &G) {
+        self.acquired = guard.reserve(ptr.as_ptr());
     }
 
     /// # Safety

@@ -7,7 +7,7 @@ use std::{
 use atomic::{Atomic, Ordering};
 use static_assertions::const_assert;
 
-use crate::{Acquired, Guard, Pointer, Rc, StrongPtr, Tagged, TaggedCnt};
+use crate::{Guard, Pointer, Rc, Snapshot, StrongPtr, Tagged, TaggedCnt, TaggedSnapshot};
 
 /// A result of unsuccessful `compare_exchange`.
 ///
@@ -20,7 +20,7 @@ pub struct CompareExchangeErrorWeak<T, P> {
 }
 
 pub struct AtomicWeak<T, G: Guard> {
-    link: Atomic<TaggedCnt<T>>,
+    pub(crate) link: Atomic<TaggedCnt<T>>,
     _marker: PhantomData<G>,
 }
 
@@ -248,91 +248,9 @@ impl<T, G: Guard> PartialEq for Weak<T, G> {
     }
 }
 
-pub struct WeakSnapshot<T, G: Guard> {
-    // Hint: `G::Acquired` is usually a wrapper struct containing `TaggedCnt`.
-    acquired: G::Acquired<T>,
-}
-
-impl<T, G: Guard> WeakSnapshot<T, G> {
-    #[inline(always)]
-    pub fn new() -> Self {
-        Self {
-            acquired: <G as Guard>::Acquired::null(),
-        }
-    }
-
-    #[inline]
-    pub fn load(&mut self, from: &AtomicWeak<T, G>, guard: &G) {
-        self.acquired = guard.protect_snapshot(&from.link);
-    }
-
-    #[inline(always)]
-    pub fn is_null(&self) -> bool {
-        self.acquired.is_null()
-    }
-
-    #[inline(always)]
-    pub fn tag(&self) -> usize {
-        self.as_ptr().tag()
-    }
-
-    #[inline(always)]
-    pub fn untagged(mut self) -> Self {
-        self.acquired.ptr_mut().set_tag(0);
-        self
-    }
-
-    pub fn set_tag(&mut self, tag: usize) {
-        self.acquired.ptr_mut().set_tag(tag);
-    }
-
-    #[inline]
-    pub fn with_tag<'s>(&'s self, tag: usize) -> TaggedWeakSnapshot<'s, T, G> {
-        TaggedWeakSnapshot { inner: self, tag }
-    }
-}
-
-impl<T, G: Guard> Drop for WeakSnapshot<T, G> {
-    #[inline(always)]
-    fn drop(&mut self) {
-        self.acquired.clear_protection();
-    }
-}
-
-impl<T, G: Guard> PartialEq for WeakSnapshot<T, G> {
-    #[inline(always)]
-    fn eq(&self, other: &Self) -> bool {
-        self.acquired.eq(&other.acquired)
-    }
-}
-
-/// A reference of a [`WeakSnapshot`] with a overwriting tag value.
-pub struct TaggedWeakSnapshot<'s, T, G: Guard> {
-    pub(crate) inner: &'s WeakSnapshot<T, G>,
-    pub(crate) tag: usize,
-}
-
 impl<T, G: Guard> Pointer<T> for Weak<T, G> {
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.ptr
-    }
-}
-
-impl<T, G: Guard> Pointer<T> for WeakSnapshot<T, G> {
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.acquired.as_ptr()
-    }
-}
-
-impl<T, G: Guard> Pointer<T> for &WeakSnapshot<T, G> {
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.acquired.as_ptr()
-    }
-}
-
-impl<'s, T, G: Guard> Pointer<T> for TaggedWeakSnapshot<'s, T, G> {
-    fn as_ptr(&self) -> TaggedCnt<T> {
-        self.inner.acquired.as_ptr().with_tag(self.tag)
     }
 }
 
@@ -344,7 +262,7 @@ pub trait WeakPtr<T, G> {
     /// environment.
     ///
     /// For example, we do nothing but forget its ownership if the pointer is [`Weak`],
-    /// but increment the reference count if the pointer is [`WeakSnapshot`].
+    /// but increment the reference count if the pointer is [`Snapshot`].
     fn into_weak_count(self);
 }
 
@@ -356,7 +274,7 @@ impl<T, G: Guard> WeakPtr<T, G> for Weak<T, G> {
     }
 }
 
-impl<T, G: Guard> WeakPtr<T, G> for WeakSnapshot<T, G> {
+impl<T, G: Guard> WeakPtr<T, G> for Snapshot<T, G> {
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
             cnt.add_ref();
@@ -364,7 +282,7 @@ impl<T, G: Guard> WeakPtr<T, G> for WeakSnapshot<T, G> {
     }
 }
 
-impl<T, G: Guard> WeakPtr<T, G> for &WeakSnapshot<T, G> {
+impl<T, G: Guard> WeakPtr<T, G> for &Snapshot<T, G> {
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
             cnt.add_ref();
@@ -372,7 +290,7 @@ impl<T, G: Guard> WeakPtr<T, G> for &WeakSnapshot<T, G> {
     }
 }
 
-impl<'s, T, G: Guard> WeakPtr<T, G> for TaggedWeakSnapshot<'s, T, G> {
+impl<'s, T, G: Guard> WeakPtr<T, G> for TaggedSnapshot<'s, T, G> {
     fn into_weak_count(self) {
         if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
             cnt.add_ref();

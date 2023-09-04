@@ -1,5 +1,5 @@
 use atomic::Ordering;
-use cdrc_rs::{AtomicRc, Guard, StrongPtr, Rc, Snapshot, TaggedCnt};
+use cdrc_rs::{AtomicRc, Guard, Pointer, Rc, Snapshot, TaggedCnt};
 
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::mem::swap;

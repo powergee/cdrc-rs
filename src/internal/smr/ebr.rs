@@ -79,17 +79,17 @@ impl Guard for GuardEBR {
     }
 
     #[inline(always)]
-    fn acquire<T>(&self, link: &atomic::Atomic<TaggedCnt<T>>) -> Self::Acquired<T> {
-        AcquiredEBR(link.load(Ordering::Acquire))
+    fn reserve<T>(&self, ptr: TaggedCnt<T>) -> Self::Acquired<T> {
+        AcquiredEBR(ptr)
     }
 
     #[inline(always)]
-    fn protect_snapshot<T>(&self, link: &atomic::Atomic<TaggedCnt<T>>) -> Self::Acquired<T> {
+    fn protect_snapshot<T>(&self, link: &atomic::Atomic<TaggedCnt<T>>) -> Option<Self::Acquired<T>> {
         let ptr = link.load(Ordering::Acquire);
         if !ptr.is_null() && unsafe { ptr.deref() }.ref_count() == 0 {
-            AcquiredEBR(TaggedCnt::null())
+            None
         } else {
-            AcquiredEBR(ptr)
+            Some(AcquiredEBR(ptr))
         }
     }
 

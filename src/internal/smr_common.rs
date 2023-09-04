@@ -44,8 +44,10 @@ pub trait Guard {
     fn new() -> Self;
     unsafe fn without_epoch() -> Self;
     fn create_object<T>(&self, obj: T) -> *mut Counted<T>;
-    fn acquire<T>(&self, link: &Atomic<TaggedCnt<T>>) -> Self::Acquired<T>;
-    fn protect_snapshot<T>(&self, link: &Atomic<TaggedCnt<T>>) -> Self::Acquired<T>;
+    /// Creates a shield for the given pointer, assuming that `ptr` is already protected by a
+    /// reference count.
+    fn reserve<T>(&self, ptr: TaggedCnt<T>) -> Self::Acquired<T>;
+    fn protect_snapshot<T>(&self, link: &Atomic<TaggedCnt<T>>) -> Option<Self::Acquired<T>>;
     unsafe fn delete_object<T>(&self, ptr: *mut Counted<T>);
     unsafe fn retire<T>(&self, ptr: *mut Counted<T>, ret_type: RetireType);
     fn clear(&mut self);
