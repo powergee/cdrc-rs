@@ -19,38 +19,42 @@ pub enum RetireType {
 /// index of a hazard slot. For this reason, a type for acquired pointer must be SMR-dependent,
 /// and every SMR must provide some reasonable interfaces to access and manage this pointer.
 pub trait Acquired<T> {
-    /// Dereference to a immutable `TaggedCnt`.
-    fn ptr(&self) -> &TaggedCnt<T>;
-    /// Dereference to a mutable `TaggedCnt`.
-    fn ptr_mut(&mut self) -> &mut TaggedCnt<T>;
-    fn clear_protection(&mut self);
+    fn clear(&mut self);
     fn as_ptr(&self) -> TaggedCnt<T>;
+    fn set_tag(&mut self, tag: usize);
     fn null() -> Self;
     fn is_null(&self) -> bool;
     fn swap(p1: &mut Self, p2: &mut Self);
     fn eq(&self, other: &Self) -> bool;
+    unsafe fn copy_to(&self, other: &mut Self);
 }
 
-/// A SMR-specific guard trait.
+/// A SMR-specific critical section manager trait.
 ///
-/// We construct this `Guard` right before starting an operation,
+/// We construct this `Cs` right before starting an operation,
 /// and drop(or `clear`) it after the operation.
-pub trait Guard {
+pub trait Cs {
     /// A SMR-specific acquired pointer trait
     ///
     /// For more information, read a comment on `Acquired<T>`.
-    type Acquired<T>: Acquired<T>;
+    type RawShield<T>: Acquired<T>;
 
     fn new() -> Self;
     unsafe fn without_epoch() -> Self;
-    fn create_object<T>(&self, obj: T) -> *mut Counted<T>;
+    unsafe fn unprotected() -> Self;
+    fn create_object<T>(obj: T) -> *mut Counted<T>;
     /// Creates a shield for the given pointer, assuming that `ptr` is already protected by a
     /// reference count.
-    fn reserve<T>(&self, ptr: TaggedCnt<T>) -> Self::Acquired<T>;
-    fn protect_snapshot<T>(&self, link: &Atomic<TaggedCnt<T>>) -> Option<Self::Acquired<T>>;
-    unsafe fn delete_object<T>(&self, ptr: *mut Counted<T>);
+    fn reserve<T>(&self, ptr: TaggedCnt<T>, shield: &mut Self::RawShield<T>);
+    fn protect_snapshot<T>(
+        &self,
+        link: &Atomic<TaggedCnt<T>>,
+        shield: &mut Self::RawShield<T>,
+    ) -> bool;
+    unsafe fn own_object<T>(ptr: *mut Counted<T>) -> Counted<T>;
     unsafe fn retire<T>(&self, ptr: *mut Counted<T>, ret_type: RetireType);
     fn clear(&mut self);
+    fn eager_reclaim(&mut self);
 
     #[inline]
     unsafe fn dispose<T>(&self, cnt: &mut Counted<T>) {
@@ -64,7 +68,7 @@ pub trait Guard {
     #[inline]
     unsafe fn destroy<T>(&self, cnt: &mut Counted<T>) {
         debug_assert!(cnt.ref_count() == 0);
-        self.delete_object(cnt);
+        drop(Self::own_object(cnt));
     }
 
     /// Perform an eject action. This can correspond to any action that

@@ -1,31 +1,31 @@
 use std::{
     marker::PhantomData,
-    mem::{self, forget, replace},
+    mem::{self, forget},
     sync::atomic::AtomicUsize,
 };
 
 use atomic::{Atomic, Ordering};
 use static_assertions::const_assert;
 
-use crate::{Acquired, AtomicWeak, Guard, Pointer, Tagged, TaggedCnt};
+use crate::{Acquired, AtomicWeak, Cs, Pointer, Tagged, TaggedCnt, Weak};
 
 /// A result of unsuccessful `compare_exchange`.
 ///
 /// It returns the ownership of [`Rc`] pointer which was given as a parameter.
 pub struct CompareExchangeErrorRc<T, P> {
-    /// The `desired` pointer which was given as a parameter of `compare_exchange`.
+    /// The `desired` which was given as a parameter of `compare_exchange`.
     pub desired: P,
     /// The current pointer value inside the atomic pointer.
     pub current: TaggedCnt<T>,
 }
 
-pub struct AtomicRc<T, G: Guard> {
+pub struct AtomicRc<T, C: Cs> {
     link: Atomic<TaggedCnt<T>>,
-    _marker: PhantomData<G>,
+    _marker: PhantomData<(T, *const C)>,
 }
 
-unsafe impl<T, G: Guard> Send for AtomicRc<T, G> {}
-unsafe impl<T, G: Guard> Sync for AtomicRc<T, G> {}
+unsafe impl<T: Send + Sync, C: Cs> Send for AtomicRc<T, C> {}
+unsafe impl<T: Send + Sync, C: Cs> Sync for AtomicRc<T, C> {}
 
 // Ensure that TaggedPtr<T> is 8-byte long,
 // so that lock-free atomic operations are possible.
@@ -33,11 +33,11 @@ const_assert!(Atomic::<TaggedCnt<u8>>::is_lock_free());
 const_assert!(mem::size_of::<TaggedCnt<u8>>() == mem::size_of::<usize>());
 const_assert!(mem::size_of::<Atomic<TaggedCnt<u8>>>() == mem::size_of::<AtomicUsize>());
 
-impl<T, G: Guard> AtomicRc<T, G> {
+impl<T, C: Cs> AtomicRc<T, C> {
     #[inline(always)]
-    pub fn new(obj: T, guard: &G) -> Self {
+    pub fn new(obj: T) -> Self {
         Self {
-            link: Atomic::new(Rc::new(obj, guard).into_ptr()),
+            link: Atomic::new(Rc::<T, C>::new(obj).into_raw()),
             _marker: PhantomData,
         }
     }
@@ -50,13 +50,35 @@ impl<T, G: Guard> AtomicRc<T, G> {
         }
     }
 
-    /// Swap the currently stored shared pointer with the given shared pointer.
+    /// Loads a raw tagged pointer from this atomic pointer.
+    ///
+    /// Note that the returned pointer cannot be dereferenced safely, becuase it is protected by
+    /// neither a SMR nor a reference count. To dereference, use `load` method of [`Snapshot`]
+    /// instead.
+    #[inline]
+    pub fn load(&self, order: Ordering) -> TaggedCnt<T> {
+        self.link.load(order)
+    }
+
+    #[inline]
+    pub fn store<P: StrongPtr<T, C>>(&self, ptr: P, order: Ordering, cs: &C) {
+        let new_ptr = ptr.as_ptr();
+        ptr.into_ref_count();
+        let old_ptr = self.link.swap(new_ptr, order);
+        unsafe {
+            if let Some(cnt) = old_ptr.as_raw().as_mut() {
+                cs.delayed_decrement_ref_cnt(cnt);
+            }
+        }
+    }
+
+    /// Swaps the currently stored shared pointer with the given shared pointer.
     /// This operation is thread-safe.
     /// (It is equivalent to `exchange` from the original implementation.)
     #[inline(always)]
-    pub fn swap(&self, new: Rc<T, G>, order: Ordering, _: &G) -> Rc<T, G> {
-        let new_ptr = new.into_ptr();
-        Rc::new_without_incr(self.link.swap(new_ptr, order))
+    pub fn swap(&self, new: Rc<T, C>, order: Ordering, _: &C) -> Rc<T, C> {
+        let new_ptr = new.into_raw();
+        Rc::from_raw(self.link.swap(new_ptr, order))
     }
 
     /// Atomically compares the underlying pointer with expected, and if they refer to
@@ -69,19 +91,19 @@ impl<T, G: Guard> AtomicRc<T, G> {
         desired: P,
         success: Ordering,
         failure: Ordering,
-        _: &'g G,
-    ) -> Result<Rc<T, G>, CompareExchangeErrorRc<T, P>>
+        _: &'g C,
+    ) -> Result<Rc<T, C>, CompareExchangeErrorRc<T, P>>
     where
-        P: StrongPtr<T, G> + Pointer<T>,
+        P: StrongPtr<T, C>,
     {
         match self
             .link
             .compare_exchange(expected, desired.as_ptr(), success, failure)
         {
             Ok(_) => {
-                let rc = Rc::new_without_incr(expected);
+                let rc = Rc::from_raw(expected);
                 // Here, `into_ref_count` increment the reference count of `desired` only if `desired`
-                // is `Snapshot` or its variants.
+                // doesn't own a reference counter.
                 //
                 // If `desired` is `Rc`, semantically the ownership of the reference count from
                 // `desired` is moved to `self`. Because of this reason, we must skip decrementing
@@ -89,10 +111,29 @@ impl<T, G: Guard> AtomicRc<T, G> {
                 desired.into_ref_count();
                 Ok(rc)
             }
-            Err(e) => Err(CompareExchangeErrorRc {
-                desired,
-                current: e,
-            }),
+            Err(current) => Err(CompareExchangeErrorRc { desired, current }),
+        }
+    }
+
+    #[inline]
+    pub fn compare_exchange_tag<'g, P>(
+        &self,
+        expected: P,
+        desired_tag: usize,
+        success: Ordering,
+        failure: Ordering,
+        _: &'g C,
+    ) -> Result<TaggedCnt<T>, CompareExchangeErrorRc<T, TaggedCnt<T>>>
+    where
+        P: StrongPtr<T, C>,
+    {
+        let desired = expected.as_ptr().with_tag(desired_tag);
+        match self
+            .link
+            .compare_exchange(expected.as_ptr(), desired, success, failure)
+        {
+            Ok(current) => Ok(current),
+            Err(current) => Err(CompareExchangeErrorRc { desired, current }),
         }
     }
 
@@ -107,23 +148,23 @@ impl<T, G: Guard> AtomicRc<T, G> {
         &self,
         expected: TaggedCnt<T>,
         mut desired: P,
-        current_snap: &mut Snapshot<T, G>,
+        current_snap: &mut Snapshot<T, C>,
         success: Ordering,
         failure: Ordering,
-        guard: &'g G,
-    ) -> Result<Rc<T, G>, CompareExchangeErrorRc<T, P>>
+        cs: &'g C,
+    ) -> Result<Rc<T, C>, CompareExchangeErrorRc<T, P>>
     where
-        P: StrongPtr<T, G> + Pointer<T>,
+        P: StrongPtr<T, C>,
     {
         loop {
-            current_snap.load(self, guard);
+            current_snap.load(self, cs);
             if current_snap.as_ptr() != expected {
                 return Err(CompareExchangeErrorRc {
                     desired,
                     current: current_snap.as_ptr(),
                 });
             }
-            match self.compare_exchange(expected, desired, success, failure, guard) {
+            match self.compare_exchange(expected, desired, success, failure, cs) {
                 Ok(rc) => return Ok(rc),
                 Err(e) => {
                     if e.current == current_snap.as_ptr() {
@@ -137,48 +178,71 @@ impl<T, G: Guard> AtomicRc<T, G> {
     }
 
     #[inline(always)]
-    pub fn fetch_or<'g>(&self, tag: usize, order: Ordering, _: &'g G) -> TaggedCnt<T> {
+    pub fn fetch_or<'g>(&self, tag: usize, order: Ordering, _: &'g C) -> TaggedCnt<T> {
         // HACK: The size and alignment of `Atomic<TaggedCnt<T>>` will be same with `AtomicUsize`.
         // The equality of the sizes is checked by `const_assert!`.
         let link = unsafe { &*(&self.link as *const _ as *const AtomicUsize) };
         let prev = link.fetch_or(tag, order);
         TaggedCnt::new(prev as *mut _)
     }
+
+    #[inline]
+    pub unsafe fn into_inner(self) -> T {
+        let ptr = self.link.load(Ordering::Relaxed).as_raw();
+        debug_assert!(!ptr.is_null());
+        debug_assert!((*ptr).ref_count() == 1);
+        forget(self);
+        C::own_object(ptr).into_inner()
+    }
 }
 
-impl<T, G: Guard> Drop for AtomicRc<T, G> {
+impl<T, C: Cs> Drop for AtomicRc<T, C> {
     #[inline(always)]
     fn drop(&mut self) {
         let ptr = self.link.load(Ordering::Relaxed);
         unsafe {
-            if let Some(cnt) = ptr.untagged().as_mut() {
-                let guard = G::new();
-                guard.delayed_decrement_ref_cnt(cnt);
+            if let Some(cnt) = ptr.as_raw().as_mut() {
+                let cs = C::new();
+                cs.delayed_decrement_ref_cnt(cnt);
             }
         }
     }
 }
 
-impl<T, G: Guard> Default for AtomicRc<T, G> {
+impl<T, C: Cs> Default for AtomicRc<T, C> {
     #[inline(always)]
     fn default() -> Self {
         Self::null()
     }
 }
 
-pub struct Rc<T, G: Guard> {
-    ptr: TaggedCnt<T>,
-    _marker: PhantomData<G>,
+impl<T, C: Cs> From<Rc<T, C>> for AtomicRc<T, C> {
+    #[inline]
+    fn from(value: Rc<T, C>) -> Self {
+        let ptr = value.into_raw();
+        Self {
+            link: Atomic::new(ptr),
+            _marker: PhantomData,
+        }
+    }
 }
 
-impl<T, G: Guard> Rc<T, G> {
+pub struct Rc<T, C: Cs> {
+    ptr: TaggedCnt<T>,
+    _marker: PhantomData<(T, *const C)>,
+}
+
+unsafe impl<T: Send + Sync, C: Cs> Send for Rc<T, C> {}
+unsafe impl<T: Send + Sync, C: Cs> Sync for Rc<T, C> {}
+
+impl<T, C: Cs> Rc<T, C> {
     #[inline(always)]
     pub fn null() -> Self {
-        Self::new_without_incr(TaggedCnt::null())
+        Self::from_raw(TaggedCnt::null())
     }
 
     #[inline(always)]
-    pub(crate) fn new_without_incr(ptr: TaggedCnt<T>) -> Self {
+    pub(crate) fn from_raw(ptr: TaggedCnt<T>) -> Self {
         Self {
             ptr,
             _marker: PhantomData,
@@ -186,22 +250,22 @@ impl<T, G: Guard> Rc<T, G> {
     }
 
     #[inline(always)]
-    pub fn from_snapshot<'g>(ptr: &Snapshot<T, G>, guard: &'g G) -> Self {
+    pub fn from_snapshot<'g>(ptr: &Snapshot<T, C>, cs: &'g C) -> Self {
         let rc = Self {
             ptr: ptr.as_ptr(),
             _marker: PhantomData,
         };
         unsafe {
-            if let Some(cnt) = rc.ptr.untagged().as_ref() {
-                guard.increment_ref_cnt(cnt);
+            if let Some(cnt) = rc.ptr.as_raw().as_ref() {
+                cs.increment_ref_cnt(cnt);
             }
         }
         rc
     }
 
     #[inline(always)]
-    pub fn new(obj: T, guard: &G) -> Self {
-        let ptr = guard.create_object(obj);
+    pub fn new(obj: T) -> Self {
+        let ptr = C::create_object(obj);
         Self {
             ptr: TaggedCnt::new(ptr),
             _marker: PhantomData,
@@ -209,55 +273,17 @@ impl<T, G: Guard> Rc<T, G> {
     }
 
     #[inline(always)]
-    pub fn clone(&self, guard: &G) -> Self {
+    pub fn clone(&self, cs: &C) -> Self {
         let rc = Self {
             ptr: self.ptr,
             _marker: PhantomData,
         };
         unsafe {
-            if let Some(cnt) = rc.ptr.untagged().as_ref() {
-                guard.increment_ref_cnt(cnt);
+            if let Some(cnt) = rc.ptr.as_raw().as_ref() {
+                cs.increment_ref_cnt(cnt);
             }
         }
         rc
-    }
-
-    pub fn finalize(self, guard: &G) {
-        unsafe {
-            if let Some(cnt) = self.ptr.untagged().as_mut() {
-                guard.delayed_decrement_ref_cnt(cnt);
-            }
-        }
-        // Prevent recursive finalizing.
-        forget(self);
-    }
-
-    #[inline(always)]
-    pub fn is_null(&self) -> bool {
-        self.ptr.is_null()
-    }
-
-    #[inline(always)]
-    pub unsafe fn as_ref(&self) -> Option<&T> {
-        if self.is_null() {
-            None
-        } else {
-            Some(unsafe { self.deref() })
-        }
-    }
-
-    /// # Safety
-    /// TODO
-    #[inline(always)]
-    pub unsafe fn deref(&self) -> &T {
-        self.ptr.deref().data()
-    }
-
-    /// # Safety
-    /// TODO
-    #[inline(always)]
-    pub unsafe fn deref_mut(&mut self) -> &mut T {
-        self.ptr.deref_mut().data_mut()
     }
 
     #[inline(always)]
@@ -276,103 +302,107 @@ impl<T, G: Guard> Rc<T, G> {
     }
 
     #[inline(always)]
-    pub fn untagged(mut self) -> Self {
-        self.ptr = TaggedCnt::new(self.ptr.untagged());
-        self
-    }
-
-    #[inline(always)]
     pub fn with_tag(mut self, tag: usize) -> Self {
-        self.ptr.set_tag(tag);
+        self.ptr = self.ptr.with_tag(tag);
         self
     }
 
-    pub(crate) fn into_ptr(self) -> TaggedCnt<T> {
+    #[inline]
+    pub(crate) fn into_raw(self) -> TaggedCnt<T> {
         let new_ptr = self.as_ptr();
         // Skip decrementing the ref count.
         forget(self);
         new_ptr
     }
+
+    #[inline]
+    pub fn finalize(self, cs: &C) {
+        unsafe {
+            if let Some(cnt) = self.ptr.as_raw().as_mut() {
+                cs.delayed_decrement_ref_cnt(cnt);
+            }
+        }
+        forget(self);
+    }
+
+    #[inline]
+    pub unsafe fn into_inner(self) -> T {
+        let ptr = self.ptr.as_raw();
+        debug_assert!(!ptr.is_null());
+        debug_assert!((*ptr).ref_count() == 1);
+        forget(self);
+        C::own_object(ptr).into_inner()
+    }
 }
 
-impl<T, G: Guard> Drop for Rc<T, G> {
+impl<T, C: Cs> Default for Rc<T, C> {
+    #[inline]
+    fn default() -> Self {
+        Self::null()
+    }
+}
+
+impl<T, C: Cs> Drop for Rc<T, C> {
     #[inline(always)]
     fn drop(&mut self) {
-        if !self.is_null() {
-            replace(self, Rc::null()).finalize(&G::new());
+        unsafe {
+            if let Some(cnt) = self.ptr.as_raw().as_mut() {
+                let cs = C::new();
+                cs.delayed_decrement_ref_cnt(cnt);
+            }
         }
     }
 }
 
-impl<T, G: Guard> PartialEq for Rc<T, G> {
+impl<T, C: Cs> PartialEq for Rc<T, C> {
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr
     }
 }
 
-pub struct Snapshot<T, G: Guard> {
-    // Hint: `G::Acquired` is usually a wrapper struct containing `TaggedCnt`.
-    acquired: G::Acquired<T>,
+pub struct Snapshot<T, C: Cs> {
+    // Hint: `C::Acquired` is usually a wrapper struct containing `TaggedCnt`.
+    acquired: C::RawShield<T>,
 }
 
-impl<T, G: Guard> Snapshot<T, G> {
+impl<T, C: Cs> Snapshot<T, C> {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
-            acquired: <G as Guard>::Acquired::null(),
+            acquired: <C as Cs>::RawShield::null(),
         }
     }
 
     #[inline]
-    pub fn load(&mut self, from: &AtomicRc<T, G>, guard: &G) {
-        self.acquired = guard
-            .protect_snapshot(&from.link)
-            .expect("The reference count cannot be 0, when we are loading from `AtomicRc`");
+    pub fn load(&mut self, from: &AtomicRc<T, C>, cs: &C) {
+        let ok = cs.protect_snapshot(&from.link, &mut self.acquired);
+        debug_assert!(
+            ok,
+            "The reference count cannot be 0, when we are loading from `AtomicRc`"
+        );
     }
 
     #[inline]
-    pub fn load_from_weak(&mut self, from: &AtomicWeak<T, G>, guard: &G) -> bool {
-        // TODO: Referencing weak variants from strong one is ugly... Find a better
-        // project/API structure.
-        self.acquired = match guard.protect_snapshot(&from.link) {
-            Some(acquired) => acquired,
-            None => return false,
-        };
+    pub fn load_from_weak(&mut self, from: &AtomicWeak<T, C>, cs: &C) -> bool {
+        cs.protect_snapshot(&from.link, &mut self.acquired)
+    }
+
+    #[inline]
+    pub fn protect(&mut self, ptr: &Rc<T, C>, cs: &C) {
+        cs.reserve(ptr.as_ptr(), &mut self.acquired);
+    }
+
+    #[inline]
+    pub fn protect_weak(&mut self, ptr: &Weak<T, C>, cs: &C) -> bool {
+        cs.reserve(ptr.as_ptr(), &mut self.acquired);
+        if !self.acquired.is_null() {
+            if unsafe { self.acquired.as_ptr().deref() }.ref_count() == 0 {
+                self.acquired.clear();
+                return false;
+            }
+        }
         true
-    }
-
-    #[inline]
-    pub fn protect(&mut self, ptr: &Rc<T, G>, guard: &G) {
-        self.acquired = guard.reserve(ptr.as_ptr());
-    }
-
-    /// # Safety
-    /// TODO
-    #[inline(always)]
-    pub unsafe fn deref<'g>(&self) -> &'g T {
-        self.acquired.ptr().deref().data()
-    }
-
-    /// # Safety
-    /// TODO
-    #[inline(always)]
-    pub unsafe fn deref_mut<'g>(&mut self) -> &'g mut T {
-        self.acquired.ptr_mut().deref_mut().data_mut()
-    }
-
-    #[inline(always)]
-    pub unsafe fn as_ref<'g>(&self) -> Option<&'g T> {
-        if self.is_null() {
-            None
-        } else {
-            Some(unsafe { self.deref() })
-        }
-    }
-
-    #[inline(always)]
-    pub fn is_null(&self) -> bool {
-        self.acquired.is_null()
     }
 
     #[inline(always)]
@@ -380,30 +410,47 @@ impl<T, G: Guard> Snapshot<T, G> {
         self.as_ptr().tag()
     }
 
-    #[inline(always)]
-    pub fn untagged(mut self) -> Self {
-        self.acquired.ptr_mut().set_tag(0);
-        self
-    }
-
+    #[inline]
     pub fn set_tag(&mut self, tag: usize) {
-        self.acquired.ptr_mut().set_tag(tag);
+        self.acquired.set_tag(tag);
     }
 
     #[inline]
-    pub fn with_tag<'s>(&'s self, tag: usize) -> TaggedSnapshot<'s, T, G> {
+    pub fn with_tag<'s>(&'s self, tag: usize) -> TaggedSnapshot<'s, T, C> {
         TaggedSnapshot { inner: self, tag }
     }
-}
 
-impl<T, G: Guard> Drop for Snapshot<T, G> {
-    #[inline(always)]
-    fn drop(&mut self) {
-        self.acquired.clear_protection();
+    #[inline]
+    pub fn clear(&mut self) {
+        self.acquired.clear();
+    }
+
+    #[inline]
+    pub fn swap(p1: &mut Self, p2: &mut Self) {
+        <C::RawShield<T> as Acquired<T>>::swap(&mut p1.acquired, &mut p2.acquired)
+    }
+
+    #[inline]
+    pub unsafe fn copy_to(&self, other: &mut Self) {
+        self.acquired.copy_to(&mut other.acquired);
     }
 }
 
-impl<T, G: Guard> PartialEq for Snapshot<T, G> {
+impl<T, C: Cs> Default for Snapshot<T, C> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T, C: Cs> Drop for Snapshot<T, C> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        self.acquired.clear();
+    }
+}
+
+impl<T, C: Cs> PartialEq for Snapshot<T, C> {
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.acquired.eq(&other.acquired)
@@ -411,36 +458,42 @@ impl<T, G: Guard> PartialEq for Snapshot<T, G> {
 }
 
 /// A reference of a [`Snapshot`] with a overwriting tag value.
-pub struct TaggedSnapshot<'s, T, G: Guard> {
-    pub(crate) inner: &'s Snapshot<T, G>,
+pub struct TaggedSnapshot<'s, T, C: Cs> {
+    pub(crate) inner: &'s Snapshot<T, C>,
     pub(crate) tag: usize,
 }
 
-impl<T, G: Guard> Pointer<T> for Rc<T, G> {
+impl<T, C: Cs> Pointer<T> for Rc<T, C> {
+    #[inline]
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.ptr
     }
 }
 
-impl<T, G: Guard> Pointer<T> for Snapshot<T, G> {
+impl<T, C: Cs> Pointer<T> for Snapshot<T, C> {
+    #[inline]
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.acquired.as_ptr()
     }
 }
 
-impl<T, G: Guard> Pointer<T> for &Snapshot<T, G> {
+impl<T, C: Cs> Pointer<T> for &Snapshot<T, C> {
+    #[inline]
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.acquired.as_ptr()
     }
 }
 
-impl<'s, T, G: Guard> Pointer<T> for TaggedSnapshot<'s, T, G> {
+impl<'s, T, C: Cs> Pointer<T> for TaggedSnapshot<'s, T, C> {
+    #[inline]
     fn as_ptr(&self) -> TaggedCnt<T> {
         self.inner.acquired.as_ptr().with_tag(self.tag)
     }
 }
 
-pub trait StrongPtr<T, G> {
+pub trait StrongPtr<T, C: Cs>: Pointer<T> {
+    const OWNS_REF_COUNT: bool;
+
     /// Consumes the aquired pointer, incrementing the reference count if we didn't increment
     /// it before.
     ///
@@ -449,37 +502,78 @@ pub trait StrongPtr<T, G> {
     ///
     /// For example, we do nothing but forget its ownership if the pointer is [`Rc`],
     /// but increment the reference count if the pointer is [`Snapshot`].
-    fn into_ref_count(self);
-}
-
-impl<T, G: Guard> StrongPtr<T, G> for Rc<T, G> {
-    fn into_ref_count(self) {
-        // As we have a reference count already, we don't have to do anything, but
-        // prevent calling a destructor which decrements it.
-        forget(self);
-    }
-}
-
-impl<T, G: Guard> StrongPtr<T, G> for Snapshot<T, G> {
-    fn into_ref_count(self) {
-        if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
+    #[inline]
+    fn into_ref_count(self)
+    where
+        Self: Sized,
+    {
+        if Self::OWNS_REF_COUNT {
+            // As we have a reference count already, we don't have to do anything, but
+            // prevent calling a destructor which decrements it.
+            forget(self);
+        } else if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
             cnt.add_ref();
+        }
+    }
+
+    /// Consumes `self` and constructs a [`Rc`] pointing to the same object.
+    ///
+    /// If `self` is already [`Rc`], it will not touch the reference count.
+    #[inline]
+    fn into_rc(self) -> Rc<T, C>
+    where
+        Self: Sized,
+    {
+        let rc = Rc::from_raw(self.as_ptr());
+        if Self::OWNS_REF_COUNT {
+            self.into_ref_count();
+        } else if let Some(cnt) = unsafe { self.as_ptr().as_raw().as_ref() } {
+            cnt.add_ref();
+        }
+        rc
+    }
+
+    #[inline]
+    unsafe fn deref<'g>(&self) -> &'g T {
+        self.as_ptr().deref().data()
+    }
+
+    #[inline]
+    unsafe fn deref_mut<'g>(&mut self) -> &'g mut T {
+        self.as_ptr().deref_mut().data_mut()
+    }
+
+    #[inline]
+    fn as_ref(&self) -> Option<&T> {
+        if self.as_ptr().is_null() {
+            None
+        } else {
+            Some(unsafe { self.deref() })
+        }
+    }
+
+    #[inline]
+    fn as_mut(&mut self) -> Option<&mut T> {
+        if self.as_ptr().is_null() {
+            None
+        } else {
+            Some(unsafe { self.deref_mut() })
         }
     }
 }
 
-impl<T, G: Guard> StrongPtr<T, G> for &Snapshot<T, G> {
-    fn into_ref_count(self) {
-        if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
-            cnt.add_ref();
-        }
-    }
+impl<T, C: Cs> StrongPtr<T, C> for Rc<T, C> {
+    const OWNS_REF_COUNT: bool = true;
 }
 
-impl<'s, T, G: Guard> StrongPtr<T, G> for TaggedSnapshot<'s, T, G> {
-    fn into_ref_count(self) {
-        if let Some(cnt) = unsafe { self.as_ptr().untagged().as_ref() } {
-            cnt.add_ref();
-        }
-    }
+impl<T, C: Cs> StrongPtr<T, C> for Snapshot<T, C> {
+    const OWNS_REF_COUNT: bool = false;
+}
+
+impl<T, C: Cs> StrongPtr<T, C> for &Snapshot<T, C> {
+    const OWNS_REF_COUNT: bool = false;
+}
+
+impl<'s, T, C: Cs> StrongPtr<T, C> for TaggedSnapshot<'s, T, C> {
+    const OWNS_REF_COUNT: bool = false;
 }
